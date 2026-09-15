@@ -14,12 +14,19 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:seed": "prisma db seed",
+    "prisma:generate": "prisma generate"
+  },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@prisma/client": "^6.19.3",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
@@ -33,6 +40,7 @@
     "@types/express": "^5.0.6",
     "@types/node": "^26.6.0",
     "@types/supertest": "^7.2.1",
+    "prisma": "^6.19.3",
     "supertest": "^7.2.2",
     "tsx": "^4.23.13",
     "typescript": "^7.0.2",

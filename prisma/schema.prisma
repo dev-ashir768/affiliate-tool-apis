@@ -1,0 +1,200 @@
+// prisma/schema.prisma
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserStatus {
+  ACTIVE
+  DISABLED
+}
+
+enum MembershipRole {
+  OWNER
+  ADMIN
+  MEMBER
+}
+
+enum MembershipStatus {
+  INVITED
+  ACTIVE
+  DISABLED
+}
+
+enum SubscriptionStatus {
+  TRIALING
+  ACTIVE
+  PAST_DUE
+  CANCELED
+  INCOMPLETE
+}
+
+enum BotStatus {
+  AVAILABLE
+  RESERVED
+  ASSIGNED
+  DISABLED
+}
+
+enum ShopRegion {
+  US
+  UK
+}
+
+enum ShopStatus {
+  PENDING_INVITE
+  VERIFYING
+  ACTIVE
+  FAILED
+  DISCONNECTED
+}
+
+enum ShopVerifyMode {
+  STUB
+  PLAYWRIGHT
+}
+
+enum VerificationJobStatus {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+}
+
+model User {
+  id           String         @id @default(cuid())
+  email        String         @unique
+  passwordHash String
+  name         String
+  status       UserStatus     @default(ACTIVE)
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+  memberships  Membership[]
+  refreshTokens RefreshToken[]
+}
+
+model Plan {
+  id                String   @id @default(cuid())
+  code              String   @unique // starter | growth | agency | free
+  name              String
+  monthlyPriceCents Int
+  seatLimit         Int
+  shopLimit         Int
+  dailyInviteQuota  Int
+  stripePriceId     String?
+  organizations     Organization[]
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+}
+
+model Organization {
+  id               String         @id @default(cuid())
+  name             String
+  slug             String         @unique
+  planId           String
+  plan             Plan           @relation(fields: [planId], references: [id])
+  stripeCustomerId String?
+  seatLimit        Int
+  shopLimit        Int
+  dailyInviteQuota Int
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+  memberships      Membership[]
+  subscription     Subscription?
+  shops            Shop[]
+}
+
+model Membership {
+  id              String           @id @default(cuid())
+  userId          String
+  organizationId  String
+  role            MembershipRole
+  status          MembershipStatus @default(ACTIVE)
+  inviteTokenHash String?
+  inviteExpiresAt DateTime?
+  user            User             @relation(fields: [userId], references: [id])
+  organization    Organization     @relation(fields: [organizationId], references: [id])
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  @@unique([userId, organizationId])
+  @@index([inviteTokenHash])
+}
+
+model Subscription {
+  id                   String             @id @default(cuid())
+  organizationId       String             @unique
+  organization         Organization       @relation(fields: [organizationId], references: [id])
+  stripeSubscriptionId String             @unique
+  status               SubscriptionStatus
+  currentPeriodEnd     DateTime?
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+}
+
+model RefreshToken {
+  id          String    @id @default(cuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id])
+  tokenHash   String    @unique
+  expiresAt   DateTime
+  revokedAt   DateTime?
+  replacedById String?
+  createdAt   DateTime  @default(now())
+}
+
+model BotIdentity {
+  id              String    @id @default(cuid())
+  email           String    @unique
+  proxyBinding    String?
+  status          BotStatus @default(AVAILABLE)
+  reservedForOrgId String?
+  reservedAt      DateTime?
+  shop            Shop?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+}
+
+model Shop {
+  id                     String       @id @default(cuid())
+  organizationId         String
+  organization           Organization @relation(fields: [organizationId], references: [id])
+  region                 ShopRegion
+  botIdentityId          String       @unique
+  botIdentity            BotIdentity  @relation(fields: [botIdentityId], references: [id])
+  externalShopId         String?
+  displayName            String?
+  status                 ShopStatus   @default(PENDING_INVITE)
+  statusReason           String?
+  sessionVaultCiphertext String?
+  verifiedAt             DateTime?
+  verificationJobs       ShopVerificationJob[]
+  createdAt              DateTime     @default(now())
+  updatedAt              DateTime     @updatedAt
+
+  @@index([organizationId])
+}
+
+model ShopVerificationJob {
+  id        String                @id @default(cuid())
+  shopId    String
+  shop      Shop                  @relation(fields: [shopId], references: [id])
+  bullJobId String?
+  mode      ShopVerifyMode
+  status    VerificationJobStatus @default(QUEUED)
+  attempts  Int                   @default(0)
+  lastError String?
+  createdAt DateTime              @default(now())
+  updatedAt DateTime              @updatedAt
+}
+
+model StripeEvent {
+  id          String   @id @default(cuid())
+  eventId     String   @unique
+  type        String
+  processedAt DateTime @default(now())
+}
