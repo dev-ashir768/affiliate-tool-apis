@@ -16,7 +16,7 @@ function toShopResponse(shop: {
   id: string;
   organizationId: string;
   region: ShopRegion;
-  botIdentityId: string;
+  botIdentityId: string | null;
   status: string;
   statusReason: string | null;
   displayName: string | null;
@@ -24,14 +24,14 @@ function toShopResponse(shop: {
   verifiedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
-  botIdentity: { email: string };
+  botIdentity: { email: string } | null;
 }) {
   return {
     id: shop.id,
     organizationId: shop.organizationId,
     region: shop.region,
     botIdentityId: shop.botIdentityId,
-    botEmail: shop.botIdentity.email,
+    botEmail: shop.botIdentity?.email ?? null,
     status: shop.status,
     statusReason: shop.statusReason,
     displayName: shop.displayName,
@@ -110,21 +110,31 @@ export async function disconnectShop(organizationId: string, shopId: string) {
     return toShopResponse(shop);
   }
 
-  const [updated] = await prisma.$transaction([
-    prisma.shop.update({
+  const botId = shop.botIdentityId;
+
+  const updated = await prisma.$transaction(async (tx) => {
+    const next = await tx.shop.update({
       where: { id: shop.id },
-      data: { status: "DISCONNECTED" },
-      include: { botIdentity: true },
-    }),
-    prisma.botIdentity.update({
-      where: { id: shop.botIdentityId },
       data: {
-        status: "AVAILABLE",
-        reservedForOrgId: null,
-        reservedAt: null,
+        status: "DISCONNECTED",
+        botIdentityId: null,
       },
-    }),
-  ]);
+      include: { botIdentity: true },
+    });
+
+    if (botId) {
+      await tx.botIdentity.update({
+        where: { id: botId },
+        data: {
+          status: "AVAILABLE",
+          reservedForOrgId: null,
+          reservedAt: null,
+        },
+      });
+    }
+
+    return next;
+  });
 
   return toShopResponse(updated);
 }

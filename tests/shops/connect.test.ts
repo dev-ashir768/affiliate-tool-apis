@@ -64,7 +64,9 @@ describe("shops connect", () => {
           where: { id: { in: createdShopIds } },
         });
         await prisma.shop.deleteMany({ where: { id: { in: createdShopIds } } });
-        const botIds = shops.map((s) => s.botIdentityId);
+        const botIds = shops
+          .map((s) => s.botIdentityId)
+          .filter((id): id is string => Boolean(id));
         if (botIds.length) {
           await prisma.botIdentity.updateMany({
             where: { id: { in: botIds } },
@@ -124,16 +126,60 @@ describe("shops connect", () => {
     const detail = await getShop(orgId, listed[0].id);
     expect(detail.id).toBe(listed[0].id);
     expect(detail.status).toBe("PENDING_INVITE");
+    expect(detail.botIdentityId).toBeTruthy();
+    const releasedBotId = detail.botIdentityId!;
 
     const disconnected = await disconnectShop(orgId, detail.id);
     expect(disconnected.status).toBe("DISCONNECTED");
+    expect(disconnected.botIdentityId).toBeNull();
+    expect(disconnected.botEmail).toBeNull();
 
     const bot = await prisma.botIdentity.findUniqueOrThrow({
-      where: { id: detail.botIdentityId },
+      where: { id: releasedBotId },
     });
     expect(bot.status).toBe("AVAILABLE");
     expect(bot.reservedForOrgId).toBeNull();
     expect(bot.reservedAt).toBeNull();
+  }, 60000);
+
+  it("reconnect after disconnect reuses a released bot", async () => {
+    await prisma.organization.update({
+      where: { id: orgId },
+      data: { shopLimit: 1 },
+    });
+
+    const shop = await connectShop({ organizationId: orgId, region: "US" });
+    createdShopIds.push(shop.id);
+    expect(shop.botIdentityId).toBeTruthy();
+    const firstBotId = shop.botIdentityId!;
+
+    const others = await prisma.botIdentity.findMany({
+      where: { id: { not: firstBotId }, status: "AVAILABLE" },
+      select: { id: true },
+    });
+    if (others.length) {
+      await prisma.botIdentity.updateMany({
+        where: { id: { in: others.map((b) => b.id) } },
+        data: { status: "DISABLED" },
+      });
+    }
+
+    try {
+      await disconnectShop(orgId, shop.id);
+
+      const again = await connectShop({ organizationId: orgId, region: "UK" });
+      createdShopIds.push(again.id);
+      expect(again.status).toBe("PENDING_INVITE");
+      expect(again.botIdentityId).toBe(firstBotId);
+      expect(again.botEmail).toMatch(/@/);
+    } finally {
+      if (others.length) {
+        await prisma.botIdentity.updateMany({
+          where: { id: { in: others.map((b) => b.id) } },
+          data: { status: "AVAILABLE" },
+        });
+      }
+    }
   }, 60000);
 
   it("HTTP: connect requires OWNER/ADMIN; members can list/get", async () => {
