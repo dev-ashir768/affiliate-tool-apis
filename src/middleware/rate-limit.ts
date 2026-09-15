@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import type { Request, RequestHandler } from "express";
 import { AppError } from "../lib/errors.js";
 import { redis } from "../lib/redis.js";
+import { logger } from "../lib/logger.js";
 
 const SLIDING_WINDOW_LUA = `
 local key = KEYS[1]
@@ -20,16 +21,28 @@ redis.call('EXPIRE', key, ttlSec)
 return 1
 `;
 
-let redisAvailable: boolean | null = null;
+/** Cooldown after a failed probe so we retry periodically instead of latching forever. */
+const REPROBE_COOLDOWN_MS = 5_000;
+let lastProbeFailureAt = 0;
+let degradedLogged = false;
 
 /** Best-effort Redis readiness; never throws — rate limit fails open. */
 async function ensureRedis(): Promise<boolean> {
   // Prefer live ready status so Redis can recover after a prior outage.
   if (redis.status === "ready") {
-    redisAvailable = true;
+    if (degradedLogged) {
+      logger.info("rate-limit redis recovered");
+      degradedLogged = false;
+    }
     return true;
   }
-  if (redisAvailable === false) return false;
+
+  if (
+    lastProbeFailureAt > 0 &&
+    Date.now() - lastProbeFailureAt < REPROBE_COOLDOWN_MS
+  ) {
+    return false;
+  }
 
   if (
     redis.status === "wait" ||
@@ -40,15 +53,18 @@ async function ensureRedis(): Promise<boolean> {
       await Promise.race([
         redis.connect(),
         new Promise((_, reject) =>
-          setTimeout(() => reject(new Error("Redis connect timeout")), 1500)
+          setTimeout(() => reject(new Error("Redis connect timeout")), 1500),
         ),
       ]);
-      if (redis.status === "ready") {
-        redisAvailable = true;
-        return true;
+      lastProbeFailureAt = 0;
+      if (degradedLogged) {
+        logger.info("rate-limit redis recovered");
+        degradedLogged = false;
       }
-    } catch {
-      redisAvailable = false;
+      return true;
+    } catch (err) {
+      lastProbeFailureAt = Date.now();
+      markDegraded(err);
       return false;
     }
   }
@@ -62,7 +78,7 @@ async function ensureRedis(): Promise<boolean> {
       await new Promise<void>((resolve, reject) => {
         const timer = setTimeout(
           () => reject(new Error("Redis ready timeout")),
-          1500
+          1500,
         );
         const onReady = () => {
           clearTimeout(timer);
@@ -81,16 +97,31 @@ async function ensureRedis(): Promise<boolean> {
         redis.once("ready", onReady);
         redis.once("error", onError);
       });
-      redisAvailable = true;
+      lastProbeFailureAt = 0;
+      if (degradedLogged) {
+        logger.info("rate-limit redis recovered");
+        degradedLogged = false;
+      }
       return true;
-    } catch {
-      redisAvailable = false;
+    } catch (err) {
+      lastProbeFailureAt = Date.now();
+      markDegraded(err);
       return false;
     }
   }
 
-  redisAvailable = false;
+  lastProbeFailureAt = Date.now();
+  markDegraded(new Error(`Unexpected redis status: ${redis.status}`));
   return false;
+}
+
+function markDegraded(err: unknown) {
+  if (degradedLogged) return;
+  degradedLogged = true;
+  logger.error("rate-limit redis degraded; failing open", {
+    err: err instanceof Error ? err.message : String(err),
+    status: redis.status,
+  });
 }
 
 function clientKey(req: Request): string {
@@ -129,7 +160,7 @@ export function rateLimit({
         String(windowSec * 1000),
         String(limit),
         member,
-        String(windowSec)
+        String(windowSec),
       )) as number;
 
       if (allowed === 0) {
@@ -137,8 +168,8 @@ export function rateLimit({
           new AppError(
             "RATE_LIMITED",
             "Too many requests, please try again later",
-            429
-          )
+            429,
+          ),
         );
         return;
       }
@@ -149,8 +180,9 @@ export function rateLimit({
         next(err);
         return;
       }
-      // Redis command failure — fail open
-      redisAvailable = false;
+      // Redis command failure — fail open, then re-probe after cooldown
+      lastProbeFailureAt = Date.now();
+      markDegraded(err);
       next();
     }
   };

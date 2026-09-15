@@ -61,8 +61,14 @@ describe("billing webhook service", () => {
           id: subscriptionId,
           status: "active",
           customer: customerId,
-          items: { data: [{ price: { id: priceId } }] },
-          current_period_end: Math.floor(Date.now() / 1000) + 86400,
+          items: {
+            data: [
+              {
+                price: { id: priceId },
+                current_period_end: Math.floor(Date.now() / 1000) + 86400,
+              },
+            ],
+          },
         },
       },
     };
@@ -86,6 +92,7 @@ describe("billing webhook service", () => {
     expect(org.dailyInviteQuota).toBe(1500);
     expect(org.subscription?.stripeSubscriptionId).toBe(subscriptionId);
     expect(org.subscription?.status).toBe("ACTIVE");
+    expect(org.subscription?.currentPeriodEnd).toBeTruthy();
   });
 
   it("rolls back StripeEvent claim when apply fails so Stripe can retry", async () => {
@@ -100,8 +107,14 @@ describe("billing webhook service", () => {
           id: retrySubId,
           status: "active",
           customer: `cus_unknown_${suffix}`,
-          items: { data: [{ price: { id: priceId } }] },
-          current_period_end: Math.floor(Date.now() / 1000) + 86400,
+          items: {
+            data: [
+              {
+                price: { id: priceId },
+                current_period_end: Math.floor(Date.now() / 1000) + 86400,
+              },
+            ],
+          },
         },
       },
     };

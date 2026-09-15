@@ -11,8 +11,49 @@ export type ShopVerifyJobData = {
   verificationJobId: string;
 };
 
+const ACTIVATABLE_STATUSES = new Set([
+  "PENDING_INVITE",
+  "VERIFYING",
+  "FAILED",
+]);
+
 export async function processShopVerify(job: Job<ShopVerifyJobData>) {
   const { shopId, mode, verificationJobId } = job.data;
+
+  const shop = await prisma.shop.findUnique({ where: { id: shopId } });
+  if (!shop) {
+    logger.info("shop-verify skipped; shop missing", { shopId, jobId: job.id });
+    return;
+  }
+  if (!ACTIVATABLE_STATUSES.has(shop.status)) {
+    logger.info("shop-verify skipped; shop not activatable", {
+      shopId,
+      status: shop.status,
+      jobId: job.id,
+    });
+    return;
+  }
+  if (!shop.botIdentityId) {
+    await prisma.shop.update({
+      where: { id: shopId },
+      data: {
+        status: "FAILED",
+        statusReason: "Missing bot identity; cannot activate shop",
+      },
+    });
+    await prisma.shopVerificationJob.update({
+      where: { id: verificationJobId },
+      data: {
+        status: "FAILED",
+        lastError: "Missing bot identity; cannot activate shop",
+      },
+    });
+    logger.error("shop-verify refused; missing botIdentityId", {
+      shopId,
+      jobId: job.id,
+    });
+    return;
+  }
 
   await prisma.shopVerificationJob.update({
     where: { id: verificationJobId },
@@ -33,7 +74,26 @@ export async function processShopVerify(job: Job<ShopVerifyJobData>) {
     } else {
       await new Promise((r) => setTimeout(r, 200));
 
-      const shop = await prisma.shop.findUniqueOrThrow({ where: { id: shopId } });
+      // Re-check before activate — shop may have been disconnected mid-job
+      const current = await prisma.shop.findUniqueOrThrow({
+        where: { id: shopId },
+      });
+      if (current.status === "DISCONNECTED" || !current.botIdentityId) {
+        logger.info("shop-verify aborted before activate", {
+          shopId,
+          status: current.status,
+          botIdentityId: current.botIdentityId,
+          jobId: job.id,
+        });
+        await prisma.shopVerificationJob.update({
+          where: { id: verificationJobId },
+          data: {
+            status: "FAILED",
+            lastError: "Shop disconnected or missing bot identity",
+          },
+        });
+        return;
+      }
 
       await prisma.$transaction(async (tx) => {
         await tx.shop.update({
@@ -46,12 +106,10 @@ export async function processShopVerify(job: Job<ShopVerifyJobData>) {
           },
         });
 
-        if (shop.botIdentityId) {
-          await tx.botIdentity.update({
-            where: { id: shop.botIdentityId },
-            data: { status: "ASSIGNED" },
-          });
-        }
+        await tx.botIdentity.update({
+          where: { id: current.botIdentityId! },
+          data: { status: "ASSIGNED" },
+        });
 
         await tx.shopVerificationJob.update({
           where: { id: verificationJobId },
@@ -61,10 +119,13 @@ export async function processShopVerify(job: Job<ShopVerifyJobData>) {
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : "verify failed";
-    await prisma.shop.update({
-      where: { id: shopId },
-      data: { status: "FAILED", statusReason: message },
-    });
+    const still = await prisma.shop.findUnique({ where: { id: shopId } });
+    if (still && still.status !== "DISCONNECTED") {
+      await prisma.shop.update({
+        where: { id: shopId },
+        data: { status: "FAILED", statusReason: message },
+      });
+    }
     await prisma.shopVerificationJob.update({
       where: { id: verificationJobId },
       data: { status: "FAILED", lastError: message },

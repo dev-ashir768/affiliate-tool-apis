@@ -50,6 +50,22 @@ function priceIdFromSubscription(object: Record<string, unknown>): string | unde
   return undefined;
 }
 
+/** Stripe API 2025-03-31+ moved period end onto subscription items (dahlia pin). */
+function periodEndFromSubscription(object: Record<string, unknown>): Date | null {
+  const items = object.items as
+    | { data?: Array<{ current_period_end?: unknown }> }
+    | undefined;
+  const fromItem = items?.data?.[0]?.current_period_end;
+  if (typeof fromItem === "number") {
+    return new Date(fromItem * 1000);
+  }
+  // Fallback for older API shapes / fixtures
+  if (typeof object.current_period_end === "number") {
+    return new Date(object.current_period_end * 1000);
+  }
+  return null;
+}
+
 function organizationIdFromSession(object: Record<string, unknown>): string | undefined {
   const metadata = object.metadata as { organizationId?: unknown } | undefined;
   return (
@@ -148,17 +164,12 @@ async function applyFromSubscription(object: Record<string, unknown>) {
     throw new AppError("NOT_FOUND", "Organization not found for subscription", 404);
   }
 
-  const periodEnd =
-    typeof object.current_period_end === "number"
-      ? new Date(object.current_period_end * 1000)
-      : null;
-
   await applyPlanAndSubscription({
     organizationId: org.id,
     stripeCustomerId,
     stripeSubscriptionId,
     status: mapSubscriptionStatus(asString(object.status) ?? "incomplete"),
-    currentPeriodEnd: periodEnd,
+    currentPeriodEnd: periodEndFromSubscription(object),
     stripePriceId: priceIdFromSubscription(object),
   });
 }

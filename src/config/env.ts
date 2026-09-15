@@ -12,6 +12,10 @@ const schema = z.object({
   ACCESS_TOKEN_TTL_SEC: z.coerce.number().default(900),
   REFRESH_TOKEN_TTL_SEC: z.coerce.number().default(604800),
   CORS_ORIGINS: z.string().default("http://localhost:3000"),
+  TRUST_PROXY: z
+    .enum(["true", "false", "1", "0"])
+    .default("false")
+    .transform((v) => v === "true" || v === "1"),
   STRIPE_SECRET_KEY: z.string().optional(),
   STRIPE_WEBHOOK_SECRET: z.string().optional(),
   SHOP_VERIFY_MODE: z.enum(["stub", "playwright"]).default("stub"),
