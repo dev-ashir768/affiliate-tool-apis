@@ -4,6 +4,7 @@ import { validateBody } from "../../middleware/validate.js";
 import { authenticate } from "../../middleware/authenticate.js";
 import { requireOrg } from "../../middleware/require-org.js";
 import { requireRole } from "../../middleware/require-role.js";
+import { rateLimit, rateLimitKey } from "../../middleware/rate-limit.js";
 import { connectShopSchema } from "./shops.schemas.js";
 import {
   connectShop,
@@ -63,6 +64,11 @@ shopsRoutes.get("/:id", authenticate, requireOrg, async (req, res, next) => {
 
 shopsRoutes.post(
   "/:id/verify",
+  rateLimit({
+    key: rateLimitKey("shop-verify"),
+    limit: 10,
+    windowSec: 60,
+  }),
   authenticate,
   requireOrg,
   requireRole("OWNER", "ADMIN"),

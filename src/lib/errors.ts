@@ -6,6 +6,7 @@ export type ErrorCode =
   | "SHOP_NOT_READY"
   | "CONFLICT"
   | "NOT_FOUND"
+  | "RATE_LIMITED"
   | "INTERNAL"
   | "NOT_IMPLEMENTED";
 

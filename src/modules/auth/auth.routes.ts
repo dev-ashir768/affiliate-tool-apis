@@ -4,6 +4,7 @@ import { env } from "../../config/env.js";
 import { AppError } from "../../lib/errors.js";
 import { validateBody } from "../../middleware/validate.js";
 import { authenticate } from "../../middleware/authenticate.js";
+import { rateLimit, rateLimitKey } from "../../middleware/rate-limit.js";
 import {
   loginSchema,
   refreshSchema,
@@ -19,6 +20,14 @@ import {
 import { refreshTtl } from "./refresh-store.js";
 
 export const authRoutes = Router();
+
+authRoutes.use(
+  rateLimit({
+    key: rateLimitKey("auth"),
+    limit: 20,
+    windowSec: 60,
+  })
+);
 
 function refreshCookieOptions(): CookieOptions {
   return {
