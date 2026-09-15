@@ -13,6 +13,10 @@ import {
   isRefreshMirrored,
   refreshTtl,
 } from "./refresh-store.js";
+import {
+  cleanupExpiredInviteStub,
+  isExpiredInviteStub,
+} from "../orgs/orgs.service.js";
 
 function slugify(name: string) {
   return (
@@ -45,7 +49,14 @@ export async function register(input: {
 }) {
   const email = input.email.toLowerCase().trim();
   const existing = await prisma.user.findUnique({ where: { email } });
-  if (existing) throw new AppError("CONFLICT", "Email already registered", 409);
+  if (existing) {
+    // Expired invite stub must not permanently brick the email
+    if (await isExpiredInviteStub(existing.id)) {
+      await cleanupExpiredInviteStub(existing.id);
+    } else {
+      throw new AppError("CONFLICT", "Email already registered", 409);
+    }
+  }
 
   const free = await prisma.plan.findUnique({ where: { code: "free" } });
   if (!free) throw new AppError("INTERNAL", "Free plan missing", 500);
@@ -54,7 +65,7 @@ export async function register(input: {
 
   const result = await prisma.$transaction(async (tx) => {
     const user = await tx.user.create({
-      data: { email, passwordHash, name: input.name },
+      data: { email, passwordHash, name: input.name, status: "ACTIVE" },
     });
     const organization = await tx.organization.create({
       data: {
@@ -99,6 +110,9 @@ export async function login(input: { email: string; password: string }) {
   const user = await prisma.user.findUnique({ where: { email } });
   if (!user || !(await verifyPassword(user.passwordHash, input.password))) {
     throw new AppError("UNAUTHORIZED", "Invalid credentials", 401);
+  }
+  if (user.status === "DISABLED") {
+    throw new AppError("FORBIDDEN", "Account is disabled", 403);
   }
   const membership = await prisma.membership.findFirst({
     where: { userId: user.id, status: "ACTIVE" },

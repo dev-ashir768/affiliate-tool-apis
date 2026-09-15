@@ -6,11 +6,59 @@ import { sha256 } from "../../lib/crypto.js";
 import { hashPassword } from "../../lib/password.js";
 import { env } from "../../config/env.js";
 
-const INVITE_STUB_NAME = "Invited";
-
 function generateInviteToken(): { raw: string; hash: string } {
   const raw = randomBytes(32).toString("base64url");
   return { raw, hash: sha256(raw) };
+}
+
+function isInviteExpired(inviteExpiresAt: Date | null): boolean {
+  return !!inviteExpiresAt && inviteExpiresAt < new Date();
+}
+
+/**
+ * Invite stub: user has never activated (no ACTIVE memberships) and only
+ * exists via INVITED memberships with an invite token. Do not use display name.
+ */
+export async function isInviteStubUser(userId: string): Promise<boolean> {
+  const activeCount = await prisma.membership.count({
+    where: { userId, status: "ACTIVE" },
+  });
+  if (activeCount > 0) return false;
+
+  const invitedWithToken = await prisma.membership.count({
+    where: {
+      userId,
+      status: "INVITED",
+      inviteTokenHash: { not: null },
+    },
+  });
+  return invitedWithToken > 0;
+}
+
+/** True when the user is an invite stub with no non-expired invites left. */
+export async function isExpiredInviteStub(userId: string): Promise<boolean> {
+  if (!(await isInviteStubUser(userId))) return false;
+
+  const liveInvite = await prisma.membership.findFirst({
+    where: {
+      userId,
+      status: "INVITED",
+      inviteTokenHash: { not: null },
+      OR: [{ inviteExpiresAt: null }, { inviteExpiresAt: { gt: new Date() } }],
+    },
+  });
+  return !liveInvite;
+}
+
+/** Delete INVITED memberships and the stub user row. */
+export async function cleanupExpiredInviteStub(userId: string): Promise<void> {
+  await prisma.$transaction(async (tx) => {
+    await tx.membership.deleteMany({
+      where: { userId, status: "INVITED" },
+    });
+    await tx.refreshToken.deleteMany({ where: { userId } });
+    await tx.user.delete({ where: { id: userId } });
+  });
 }
 
 async function countSeats(organizationId: string): Promise<number> {
@@ -97,19 +145,26 @@ export async function createInvite(input: {
     where: { id: input.organizationId },
   });
 
-  const seats = await countSeats(input.organizationId);
-  if (seats >= org.seatLimit) {
-    throw new AppError("PLAN_LIMIT", "Seat limit reached", 403);
-  }
-
   let user = await prisma.user.findUnique({ where: { email } });
   let createdStub = false;
+
+  // Expired invite stub from another path: reuse email by cleaning up first
+  if (user && (await isExpiredInviteStub(user.id))) {
+    await cleanupExpiredInviteStub(user.id);
+    user = null;
+  }
+
   if (!user) {
+    const seats = await countSeats(input.organizationId);
+    if (seats >= org.seatLimit) {
+      throw new AppError("PLAN_LIMIT", "Seat limit reached", 403);
+    }
     user = await prisma.user.create({
       data: {
         email,
+        // Random unusable hash — stub identity is membership INVITED+token, not name
         passwordHash: await hashPassword(randomBytes(32).toString("base64url")),
-        name: INVITE_STUB_NAME,
+        name: "Invited",
       },
     });
     createdStub = true;
@@ -129,15 +184,48 @@ export async function createInvite(input: {
     }
     throw new AppError("CONFLICT", "User is already a member", 409);
   }
-  if (existing?.status === "INVITED") {
-    if (createdStub) {
-      await prisma.user.delete({ where: { id: user.id } }).catch(() => undefined);
-    }
-    throw new AppError("CONFLICT", "User already invited", 409);
-  }
 
   const { raw, hash } = generateInviteToken();
   const inviteExpiresAt = new Date(Date.now() + env.INVITE_TTL_SEC * 1000);
+
+  // Re-invite: rotate token + extend expiry when prior invite expired
+  if (existing?.status === "INVITED") {
+    if (!isInviteExpired(existing.inviteExpiresAt)) {
+      if (createdStub) {
+        await prisma.user.delete({ where: { id: user.id } }).catch(() => undefined);
+      }
+      throw new AppError("CONFLICT", "User already invited", 409);
+    }
+
+    const membership = await prisma.membership.update({
+      where: { id: existing.id },
+      data: {
+        role: input.role,
+        status: "INVITED",
+        inviteTokenHash: hash,
+        inviteExpiresAt,
+      },
+    });
+
+    return {
+      inviteToken: raw,
+      membership: {
+        id: membership.id,
+        role: membership.role,
+        status: membership.status,
+        email,
+        inviteExpiresAt: membership.inviteExpiresAt,
+      },
+    };
+  }
+
+  // New membership — seat check (re-invite of expired does not consume an extra seat)
+  if (!createdStub) {
+    const seats = await countSeats(input.organizationId);
+    if (seats >= org.seatLimit) {
+      throw new AppError("PLAN_LIMIT", "Seat limit reached", 403);
+    }
+  }
 
   const membership = existing
     ? await prisma.membership.update({
@@ -190,6 +278,8 @@ export async function acceptInvite(input: {
     throw new AppError("FORBIDDEN", "Invite expired", 403);
   }
 
+  const stub = await isInviteStubUser(membership.userId);
+
   if (input.actorUserId) {
     if (input.actorUserId !== membership.userId) {
       throw new AppError(
@@ -198,7 +288,7 @@ export async function acceptInvite(input: {
         403
       );
     }
-  } else if (membership.user.name === INVITE_STUB_NAME) {
+  } else if (stub) {
     if (!input.password || !input.name) {
       throw new AppError(
         "VALIDATION_ERROR",

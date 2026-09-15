@@ -50,4 +50,19 @@ describe("auth.service", () => {
     const result = await login({ email, password: "Secret123!" });
     expect(result.accessToken).toBeTruthy();
   }, 60000);
+
+  it("rejects DISABLED users on login", async () => {
+    const user = await prisma.user.findUniqueOrThrow({ where: { email } });
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { status: "DISABLED" },
+    });
+    await expect(login({ email, password: "Secret123!" })).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { status: "ACTIVE" },
+    });
+  }, 60000);
 });

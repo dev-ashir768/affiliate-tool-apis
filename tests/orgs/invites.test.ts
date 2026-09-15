@@ -101,29 +101,48 @@ describe("orgs invites", () => {
         existingInviteeEmail,
         realUserNoAuthEmail,
         roomyOwnerEmail,
+        `expired_stub_${suffix}@test.com`,
+        `http_invite_${suffix}@test.com`,
       ];
       const users = await prisma.user.findMany({
         where: { email: { in: emails } },
       });
-      // Also clean stub users created under invite email variants
-      const orgIds = [limitedOrgId, roomyOrgId].filter(Boolean);
+      const userIds = users.map((u) => u.id);
+      const memberships = userIds.length
+        ? await prisma.membership.findMany({
+            where: {
+              OR: [
+                { userId: { in: userIds } },
+                {
+                  organizationId: {
+                    in: [limitedOrgId, roomyOrgId].filter(Boolean),
+                  },
+                },
+              ],
+            },
+          })
+        : [];
+      const memberUserIds = memberships.map((m) => m.userId);
+      const orgIds = [
+        ...new Set([
+          ...memberships.map((m) => m.organizationId),
+          limitedOrgId,
+          roomyOrgId,
+        ].filter(Boolean)),
+      ];
       if (orgIds.length) {
-        const memberships = await prisma.membership.findMany({
-          where: { organizationId: { in: orgIds } },
-        });
-        const memberUserIds = memberships.map((m) => m.userId);
         await prisma.membership.deleteMany({
           where: { organizationId: { in: orgIds } },
         });
-        const allUserIds = [
-          ...new Set([...users.map((u) => u.id), ...memberUserIds]),
-        ];
-        if (allUserIds.length) {
-          await prisma.refreshToken.deleteMany({
-            where: { userId: { in: allUserIds } },
-          });
-          await prisma.user.deleteMany({ where: { id: { in: allUserIds } } });
-        }
+      }
+      const allUserIds = [...new Set([...userIds, ...memberUserIds])];
+      if (allUserIds.length) {
+        await prisma.refreshToken.deleteMany({
+          where: { userId: { in: allUserIds } },
+        });
+        await prisma.user.deleteMany({ where: { id: { in: allUserIds } } });
+      }
+      if (orgIds.length) {
         await prisma.organization.deleteMany({ where: { id: { in: orgIds } } });
       }
     } finally {
@@ -198,6 +217,26 @@ describe("orgs invites", () => {
     });
     const originalHash = realUser.passwordHash;
 
+    // Real users have an ACTIVE membership elsewhere (or any ACTIVE) — not stubs
+    const otherOrg = await prisma.organization.create({
+      data: {
+        name: "Other Org",
+        slug: `other-${suffix}`,
+        planId,
+        seatLimit: 5,
+        shopLimit: 0,
+        dailyInviteQuota: 0,
+      },
+    });
+    await prisma.membership.create({
+      data: {
+        userId: realUser.id,
+        organizationId: otherOrg.id,
+        role: "OWNER",
+        status: "ACTIVE",
+      },
+    });
+
     const created = await createInvite({
       organizationId: roomyOrgId,
       actorUserId: roomyOwnerId,
@@ -228,6 +267,62 @@ describe("orgs invites", () => {
       },
     });
     expect(membership.status).toBe("INVITED");
+
+    await prisma.membership.deleteMany({ where: { organizationId: otherOrg.id } });
+    await prisma.organization.delete({ where: { id: otherOrg.id } });
+  }, 60000);
+
+  it("re-invites when prior invite expired and register cleans expired stub", async () => {
+    const expiredEmail = `expired_stub_${suffix}@test.com`;
+    const first = await createInvite({
+      organizationId: roomyOrgId,
+      actorUserId: roomyOwnerId,
+      email: expiredEmail,
+      role: "MEMBER",
+    });
+
+    await prisma.membership.update({
+      where: { id: first.membership.id },
+      data: { inviteExpiresAt: new Date(Date.now() - 60_000) },
+    });
+
+    await expect(
+      acceptInvite({
+        token: first.inviteToken,
+        password: "Welcome123!",
+        name: "Too Late",
+      })
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+
+    const second = await createInvite({
+      organizationId: roomyOrgId,
+      actorUserId: roomyOwnerId,
+      email: expiredEmail,
+      role: "ADMIN",
+    });
+    expect(second.inviteToken).toBeTruthy();
+    expect(second.inviteToken).not.toBe(first.inviteToken);
+    expect(second.membership.role).toBe("ADMIN");
+
+    // Expire again and register should adopt the email
+    await prisma.membership.updateMany({
+      where: {
+        organizationId: roomyOrgId,
+        user: { email: expiredEmail },
+        status: "INVITED",
+      },
+      data: { inviteExpiresAt: new Date(Date.now() - 60_000) },
+    });
+
+    const { register } = await import("../../src/modules/auth/auth.service.js");
+    const registered = await register({
+      email: expiredEmail,
+      password: "FreshPass1!",
+      name: "Fresh User",
+      organizationName: `Fresh Org ${suffix}`,
+    });
+    expect(registered.user.email).toBe(expiredEmail);
+    expect(registered.user.name).toBe("Fresh User");
   }, 60000);
 
   it("getCurrent / patchCurrent / listMembers work", async () => {
