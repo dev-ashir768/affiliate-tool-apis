@@ -1,11 +1,11 @@
-import Redis from "ioredis";
+import { Redis } from "ioredis";
 import { env } from "../config/env.js";
 
 export const redis = new Redis(env.REDIS_URL, {
   maxRetriesPerRequest: null,
   lazyConnect: true,
   enableOfflineQueue: false,
-  retryStrategy(times) {
+  retryStrategy(times: number) {
     if (env.NODE_ENV === "test") return null;
     return Math.min(times * 50, 2000);
   },
