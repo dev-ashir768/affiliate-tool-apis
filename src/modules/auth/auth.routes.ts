@@ -49,7 +49,7 @@ function rawRefreshFromRequest(req: {
 }): string {
   const fromBody = req.body?.refreshToken;
   const fromCookie = req.cookies?.refresh_token;
-  const raw = fromBody || fromCookie;
+  const raw = fromCookie || fromBody;
   if (!raw) {
     throw new AppError("UNAUTHORIZED", "Missing refresh token", 401);
   }
@@ -102,7 +102,7 @@ authRoutes.post("/refresh", validateBody(refreshSchema), async (req, res, next) 
 
 authRoutes.post("/logout", validateBody(refreshSchema), async (req, res, next) => {
   try {
-    const raw = req.body?.refreshToken || req.cookies?.refresh_token;
+    const raw = req.cookies?.refresh_token || req.body?.refreshToken;
     if (raw) {
       await revokeRefresh(raw);
     }
