@@ -11,6 +11,7 @@ import {
   getShop,
   listShops,
 } from "./shops.service.js";
+import { requestVerify } from "./verify.service.js";
 
 export const shopsRoutes = Router();
 
@@ -59,6 +60,24 @@ shopsRoutes.get("/:id", authenticate, requireOrg, async (req, res, next) => {
     next(err);
   }
 });
+
+shopsRoutes.post(
+  "/:id/verify",
+  authenticate,
+  requireOrg,
+  requireRole("OWNER", "ADMIN"),
+  async (req, res, next) => {
+    try {
+      if (!req.auth) {
+        throw new AppError("UNAUTHORIZED", "Missing access token", 401);
+      }
+      const result = await requestVerify(req.auth.orgId, String(req.params.id));
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
 
 shopsRoutes.delete(
   "/:id",

@@ -6,5 +6,7 @@ export default defineConfig({
     include: ["tests/**/*.test.ts"],
     setupFiles: ["tests/setup.ts"],
     testTimeout: 30000,
+    // Shop tests share a small seeded bot pool; parallel files race on reserveBot.
+    fileParallelism: false,
   },
 });
