@@ -1,0 +1,55 @@
+﻿# Review package Task 2 re-review (fix focus)
+BASE: 0a69daef16c3cb96982fda2df280da962967a884
+HEAD: ece35fe28f981f6dec564630724910df210ec10a
+## Commits
+ece35fe fix: use prisma migrate deploy for prisma:migrate script
+b814874 feat: add Foundation Prisma schema, migrate, and seed
+
+## package.json Stat
+ package.json | 11 ++++++++++-
+ 1 file changed, 10 insertions(+), 1 deletion(-)
+
+## package.json Diff
+diff --git a/package.json b/package.json
+index f641439..3ff3ca4 100644
+--- a/package.json
++++ b/package.json
+@@ -12,16 +12,24 @@
+     "dev": "tsx watch src/server.ts",
+     "worker": "tsx watch src/worker.ts",
+     "build": "tsc -p tsconfig.json",
+     "start": "node dist/server.js",
+     "test": "vitest run",
+-    "test:watch": "vitest"
++    "test:watch": "vitest",
++    "prisma:migrate": "prisma migrate deploy",
++    "prisma:migrate:dev": "prisma migrate dev",
++    "prisma:seed": "prisma db seed",
++    "prisma:generate": "prisma generate"
++  },
++  "prisma": {
++    "seed": "tsx prisma/seed.ts"
+   },
+   "keywords": [],
+   "author": "",
+   "license": "ISC",
+   "dependencies": {
++    "@prisma/client": "^6.19.3",
+     "cookie-parser": "^1.4.7",
+     "cors": "^2.8.6",
+     "dotenv": "^17.4.2",
+     "express": "^5.2.1",
+     "helmet": "^8.3.0",
+@@ -31,10 +39,11 @@
+     "@types/cookie-parser": "^1.4.10",
+     "@types/cors": "^2.8.19",
+     "@types/express": "^5.0.6",
+     "@types/node": "^26.6.0",
+     "@types/supertest": "^7.2.1",
++    "prisma": "^6.19.3",
+     "supertest": "^7.2.2",
+     "tsx": "^4.23.13",
+     "typescript": "^7.0.2",
+     "vitest": "^5.0.1"
+   }
+

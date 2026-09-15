@@ -1,0 +1,501 @@
+﻿# Review Task 7
+BASE: 69fff64b757f3cf4a0848b9c12f6af3a6a1624d0
+HEAD: 010e86bb25312244879224469255b815cfd8a669
+## Commits
+010e86b feat: add shop connect, list, and disconnect with bot reservation
+
+## Stat
+ src/app.ts                         |   2 +
+ src/modules/bots/bots.service.ts   |  23 +++++
+ src/modules/shops/shops.routes.ts  |  79 ++++++++++++++++
+ src/modules/shops/shops.schemas.ts |   5 +
+ src/modules/shops/shops.service.ts | 130 ++++++++++++++++++++++++++
+ tests/shops/connect.test.ts        | 182 +++++++++++++++++++++++++++++++++++++
+ 6 files changed, 421 insertions(+)
+
+## Diff
+diff --git a/src/app.ts b/src/app.ts
+index ac0826a..a6e7569 100644
+--- a/src/app.ts
++++ b/src/app.ts
+@@ -5,16 +5,17 @@ import cookieParser from "cookie-parser";
+ import { env } from "./config/env.js";
+ import { errorHandler } from "./middleware/error-handler.js";
+ import { authRoutes } from "./modules/auth/auth.routes.js";
+ import { orgsRoutes } from "./modules/orgs/orgs.routes.js";
+ import {
+   billingRoutes,
+   billingWebhookHandler,
+ } from "./modules/billing/billing.routes.js";
++import { shopsRoutes } from "./modules/shops/shops.routes.js";
+ 
+ export function createApp() {
+   const app = express();
+   app.use(helmet());
+   app.use(
+     cors({
+       origin: env.CORS_ORIGINS.split(",").map((s) => s.trim()),
+       credentials: true,
+@@ -26,11 +27,12 @@ export function createApp() {
+     "/api/v1/webhooks/stripe",
+     express.raw({ type: "application/json" }),
+     billingWebhookHandler
+   );
+   app.use(express.json());
+   app.use("/api/v1/auth", authRoutes);
+   app.use("/api/v1/orgs", orgsRoutes);
+   app.use("/api/v1/billing", billingRoutes);
++  app.use("/api/v1/shops", shopsRoutes);
+   app.use(errorHandler);
+   return app;
+ }
+diff --git a/src/modules/bots/bots.service.ts b/src/modules/bots/bots.service.ts
+new file mode 100644
+index 0000000..be7934d
+--- /dev/null
++++ b/src/modules/bots/bots.service.ts
+@@ -0,0 +1,23 @@
++import { prisma } from "../../lib/prisma.js";
++import { AppError } from "../../lib/errors.js";
++
++export async function reserveBot(organizationId: string) {
++  const bot = await prisma.botIdentity.findFirst({
++    where: { status: "AVAILABLE", shop: null },
++    orderBy: { createdAt: "asc" },
++  });
++  if (!bot) throw new AppError("CONFLICT", "No bots available", 409);
++
++  const updated = await prisma.botIdentity.updateMany({
++    where: { id: bot.id, status: "AVAILABLE" },
++    data: {
++      status: "RESERVED",
++      reservedForOrgId: organizationId,
++      reservedAt: new Date(),
++    },
++  });
++  if (updated.count !== 1) {
++    throw new AppError("CONFLICT", "Bot reservation race; retry", 409);
++  }
++  return prisma.botIdentity.findUniqueOrThrow({ where: { id: bot.id } });
++}
+diff --git a/src/modules/shops/shops.routes.ts b/src/modules/shops/shops.routes.ts
+new file mode 100644
+index 0000000..c0abcc3
+--- /dev/null
++++ b/src/modules/shops/shops.routes.ts
+@@ -0,0 +1,79 @@
++import { Router } from "express";
++import { AppError } from "../../lib/errors.js";
++import { validateBody } from "../../middleware/validate.js";
++import { authenticate } from "../../middleware/authenticate.js";
++import { requireOrg } from "../../middleware/require-org.js";
++import { requireRole } from "../../middleware/require-role.js";
++import { connectShopSchema } from "./shops.schemas.js";
++import {
++  connectShop,
++  disconnectShop,
++  getShop,
++  listShops,
++} from "./shops.service.js";
++
++export const shopsRoutes = Router();
++
++shopsRoutes.get("/", authenticate, requireOrg, async (req, res, next) => {
++  try {
++    if (!req.auth) {
++      throw new AppError("UNAUTHORIZED", "Missing access token", 401);
++    }
++    const shops = await listShops(req.auth.orgId);
++    res.json({ shops });
++  } catch (err) {
++    next(err);
++  }
++});
++
++shopsRoutes.post(
++  "/connect",
++  authenticate,
++  requireOrg,
++  requireRole("OWNER", "ADMIN"),
++  validateBody(connectShopSchema),
++  async (req, res, next) => {
++    try {
++      if (!req.auth) {
++        throw new AppError("UNAUTHORIZED", "Missing access token", 401);
++      }
++      const shop = await connectShop({
++        organizationId: req.auth.orgId,
++        region: req.body.region,
++      });
++      res.status(201).json(shop);
++    } catch (err) {
++      next(err);
++    }
++  }
++);
++
++shopsRoutes.get("/:id", authenticate, requireOrg, async (req, res, next) => {
++  try {
++    if (!req.auth) {
++      throw new AppError("UNAUTHORIZED", "Missing access token", 401);
++    }
++    const shop = await getShop(req.auth.orgId, String(req.params.id));
++    res.json(shop);
++  } catch (err) {
++    next(err);
++  }
++});
++
++shopsRoutes.delete(
++  "/:id",
++  authenticate,
++  requireOrg,
++  requireRole("OWNER", "ADMIN"),
++  async (req, res, next) => {
++    try {
++      if (!req.auth) {
++        throw new AppError("UNAUTHORIZED", "Missing access token", 401);
++      }
++      const shop = await disconnectShop(req.auth.orgId, String(req.params.id));
++      res.json(shop);
++    } catch (err) {
++      next(err);
++    }
++  }
++);
+diff --git a/src/modules/shops/shops.schemas.ts b/src/modules/shops/shops.schemas.ts
+new file mode 100644
+index 0000000..8121c16
+--- /dev/null
++++ b/src/modules/shops/shops.schemas.ts
+@@ -0,0 +1,5 @@
++import { z } from "zod";
++
++export const connectShopSchema = z.object({
++  region: z.enum(["US", "UK"]),
++});
+diff --git a/src/modules/shops/shops.service.ts b/src/modules/shops/shops.service.ts
+new file mode 100644
+index 0000000..52d9332
+--- /dev/null
++++ b/src/modules/shops/shops.service.ts
+@@ -0,0 +1,130 @@
++import type { ShopRegion } from "@prisma/client";
++import { prisma } from "../../lib/prisma.js";
++import { AppError } from "../../lib/errors.js";
++import { reserveBot } from "../bots/bots.service.js";
++
++async function countActiveShops(organizationId: string): Promise<number> {
++  return prisma.shop.count({
++    where: {
++      organizationId,
++      status: { not: "DISCONNECTED" },
++    },
++  });
++}
++
++function toShopResponse(shop: {
++  id: string;
++  organizationId: string;
++  region: ShopRegion;
++  botIdentityId: string;
++  status: string;
++  statusReason: string | null;
++  displayName: string | null;
++  externalShopId: string | null;
++  verifiedAt: Date | null;
++  createdAt: Date;
++  updatedAt: Date;
++  botIdentity: { email: string };
++}) {
++  return {
++    id: shop.id,
++    organizationId: shop.organizationId,
++    region: shop.region,
++    botIdentityId: shop.botIdentityId,
++    botEmail: shop.botIdentity.email,
++    status: shop.status,
++    statusReason: shop.statusReason,
++    displayName: shop.displayName,
++    externalShopId: shop.externalShopId,
++    verifiedAt: shop.verifiedAt,
++    createdAt: shop.createdAt,
++    updatedAt: shop.updatedAt,
++  };
++}
++
++export async function connectShop(input: {
++  organizationId: string;
++  region: ShopRegion;
++}) {
++  const org = await prisma.organization.findUniqueOrThrow({
++    where: { id: input.organizationId },
++  });
++
++  const activeCount = await countActiveShops(input.organizationId);
++  if (activeCount >= org.shopLimit) {
++    throw new AppError("PLAN_LIMIT", "Shop limit reached", 403);
++  }
++
++  const bot = await reserveBot(input.organizationId);
++
++  try {
++    const shop = await prisma.shop.create({
++      data: {
++        organizationId: input.organizationId,
++        region: input.region,
++        botIdentityId: bot.id,
++        status: "PENDING_INVITE",
++      },
++      include: { botIdentity: true },
++    });
++    return toShopResponse(shop);
++  } catch (err) {
++    await prisma.botIdentity.update({
++      where: { id: bot.id },
++      data: {
++        status: "AVAILABLE",
++        reservedForOrgId: null,
++        reservedAt: null,
++      },
++    });
++    throw err;
++  }
++}
++
++export async function listShops(organizationId: string) {
++  const shops = await prisma.shop.findMany({
++    where: { organizationId },
++    include: { botIdentity: true },
++    orderBy: { createdAt: "asc" },
++  });
++  return shops.map(toShopResponse);
++}
++
++export async function getShop(organizationId: string, shopId: string) {
++  const shop = await prisma.shop.findFirst({
++    where: { id: shopId, organizationId },
++    include: { botIdentity: true },
++  });
++  if (!shop) throw new AppError("NOT_FOUND", "Shop not found", 404);
++  return toShopResponse(shop);
++}
++
++export async function disconnectShop(organizationId: string, shopId: string) {
++  const shop = await prisma.shop.findFirst({
++    where: { id: shopId, organizationId },
++    include: { botIdentity: true },
++  });
++  if (!shop) throw new AppError("NOT_FOUND", "Shop not found", 404);
++
++  if (shop.status === "DISCONNECTED") {
++    return toShopResponse(shop);
++  }
++
++  const [updated] = await prisma.$transaction([
++    prisma.shop.update({
++      where: { id: shop.id },
++      data: { status: "DISCONNECTED" },
++      include: { botIdentity: true },
++    }),
++    prisma.botIdentity.update({
++      where: { id: shop.botIdentityId },
++      data: {
++        status: "AVAILABLE",
++        reservedForOrgId: null,
++        reservedAt: null,
++      },
++    }),
++  ]);
++
++  return toShopResponse(updated);
++}
+diff --git a/tests/shops/connect.test.ts b/tests/shops/connect.test.ts
+new file mode 100644
+index 0000000..525b090
+--- /dev/null
++++ b/tests/shops/connect.test.ts
+@@ -0,0 +1,182 @@
++import { describe, it, expect, beforeAll, afterAll } from "vitest";
++import request from "supertest";
++import { prisma } from "../../src/lib/prisma.js";
++import { hashPassword } from "../../src/lib/password.js";
++import { signAccessToken } from "../../src/lib/tokens.js";
++import { createApp } from "../../src/app.js";
++import {
++  connectShop,
++  disconnectShop,
++  getShop,
++  listShops,
++} from "../../src/modules/shops/shops.service.js";
++import { redis } from "../../src/lib/redis.js";
++
++describe("shops connect", () => {
++  const suffix = Date.now();
++  const ownerEmail = `shop_owner_${suffix}@test.com`;
++
++  let orgId = "";
++  let ownerId = "";
++  let planId = "";
++  const app = createApp();
++  const createdShopIds: string[] = [];
++
++  beforeAll(async () => {
++    const free = await prisma.plan.findUniqueOrThrow({ where: { code: "free" } });
++    planId = free.id;
++
++    const owner = await prisma.user.create({
++      data: {
++        email: ownerEmail,
++        passwordHash: await hashPassword("Secret123!"),
++        name: "Shop Owner",
++      },
++    });
++    ownerId = owner.id;
++
++    const org = await prisma.organization.create({
++      data: {
++        name: "Shop Org",
++        slug: `shop-org-${suffix}`,
++        planId,
++        seatLimit: 1,
++        shopLimit: 0,
++        dailyInviteQuota: 0,
++      },
++    });
++    orgId = org.id;
++
++    await prisma.membership.create({
++      data: {
++        userId: owner.id,
++        organizationId: org.id,
++        role: "OWNER",
++        status: "ACTIVE",
++      },
++    });
++  }, 60000);
++
++  afterAll(async () => {
++    try {
++      if (createdShopIds.length) {
++        const shops = await prisma.shop.findMany({
++          where: { id: { in: createdShopIds } },
++        });
++        await prisma.shop.deleteMany({ where: { id: { in: createdShopIds } } });
++        const botIds = shops.map((s) => s.botIdentityId);
++        if (botIds.length) {
++          await prisma.botIdentity.updateMany({
++            where: { id: { in: botIds } },
++            data: {
++              status: "AVAILABLE",
++              reservedForOrgId: null,
++              reservedAt: null,
++            },
++          });
++        }
++      }
++      if (orgId) {
++        await prisma.membership.deleteMany({ where: { organizationId: orgId } });
++        await prisma.organization.delete({ where: { id: orgId } });
++      }
++      if (ownerId) {
++        await prisma.refreshToken.deleteMany({ where: { userId: ownerId } });
++        await prisma.user.delete({ where: { id: ownerId } });
++      }
++    } finally {
++      await prisma.$disconnect();
++      if (redis.status === "ready") await redis.quit();
++    }
++  });
++
++  it("connectShop when shopLimit is 0 throws PLAN_LIMIT", async () => {
++    await expect(
++      connectShop({ organizationId: orgId, region: "US" })
++    ).rejects.toMatchObject({ code: "PLAN_LIMIT" });
++  }, 60000);
++
++  it("connects shop and reserves bot", async () => {
++    await prisma.organization.update({
++      where: { id: orgId },
++      data: { shopLimit: 1 },
++    });
++
++    const shop = await connectShop({ organizationId: orgId, region: "US" });
++    createdShopIds.push(shop.id);
++
++    expect(shop.status).toBe("PENDING_INVITE");
++    expect(shop.botEmail).toMatch(/@/);
++    expect(shop.region).toBe("US");
++  }, 60000);
++
++  it("second connect when limit 1 throws PLAN_LIMIT", async () => {
++    await expect(
++      connectShop({ organizationId: orgId, region: "UK" })
++    ).rejects.toMatchObject({ code: "PLAN_LIMIT" });
++  }, 60000);
++
++  it("listShops / getShop / disconnectShop work", async () => {
++    const listed = await listShops(orgId);
++    expect(listed.length).toBe(1);
++    expect(listed[0].botEmail).toMatch(/@/);
++
++    const detail = await getShop(orgId, listed[0].id);
++    expect(detail.id).toBe(listed[0].id);
++    expect(detail.status).toBe("PENDING_INVITE");
++
++    const disconnected = await disconnectShop(orgId, detail.id);
++    expect(disconnected.status).toBe("DISCONNECTED");
++
++    const bot = await prisma.botIdentity.findUniqueOrThrow({
++      where: { id: detail.botIdentityId },
++    });
++    expect(bot.status).toBe("AVAILABLE");
++    expect(bot.reservedForOrgId).toBeNull();
++    expect(bot.reservedAt).toBeNull();
++  }, 60000);
++
++  it("HTTP: connect requires OWNER/ADMIN; members can list/get", async () => {
++    await prisma.organization.update({
++      where: { id: orgId },
++      data: { shopLimit: 2 },
++    });
++
++    const accessToken = await signAccessToken({
++      sub: ownerId,
++      orgId,
++      role: "OWNER",
++    });
++
++    const connectRes = await request(app)
++      .post("/api/v1/shops/connect")
++      .set("Authorization", `Bearer ${accessToken}`)
++      .send({ region: "UK" });
++
++    expect(connectRes.status).toBe(201);
++    expect(connectRes.body.status).toBe("PENDING_INVITE");
++    expect(connectRes.body.botEmail).toMatch(/@/);
++    createdShopIds.push(connectRes.body.id);
++
++    const listRes = await request(app)
++      .get("/api/v1/shops")
++      .set("Authorization", `Bearer ${accessToken}`);
++
++    expect(listRes.status).toBe(200);
++    expect(listRes.body.shops.length).toBeGreaterThanOrEqual(1);
++
++    const getRes = await request(app)
++      .get(`/api/v1/shops/${connectRes.body.id}`)
++      .set("Authorization", `Bearer ${accessToken}`);
++
++    expect(getRes.status).toBe(200);
++    expect(getRes.body.id).toBe(connectRes.body.id);
++
++    const delRes = await request(app)
++      .delete(`/api/v1/shops/${connectRes.body.id}`)
++      .set("Authorization", `Bearer ${accessToken}`);
++
++    expect(delRes.status).toBe(200);
++    expect(delRes.body.status).toBe("DISCONNECTED");
++  }, 60000);
++});
+

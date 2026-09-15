@@ -1,0 +1,4890 @@
+﻿# Final branch review package
+BASE: 6a256eafc89eff269535c1ae18ee8ea3dd5057e9
+HEAD: b9d2115ae2ee7f9243061b33d720f90171846408
+
+## Commits
+b9d2115 docs: add Foundation README, rate limits, and smoke script
+77eeedd fix: do not leave shop VERIFYING when enqueue fails
+3d5c336 feat: add shop-verify BullMQ worker with stub and Playwright scaffold
+3b6f600 fix: release botIdentity FK on shop disconnect
+010e86b feat: add shop connect, list, and disconnect with bot reservation
+69fff64 fix: roll back StripeEvent claim when webhook apply fails
+79e25fc feat: add Stripe checkout, portal, and idempotent webhooks
+c52d9e5 fix: require auth when accepting invites for existing users
+cb676a9 feat: add org current endpoints and seat-limited invites
+1d9fece fix: prefer refresh_token cookie over body token
+f224536 feat: implement JWT auth register, login, refresh, logout, me
+a405986 feat: implement JWT auth register, login, refresh, logout, me
+812c540 feat: add password hashing, JWT helpers, crypto, and Redis client
+ece35fe fix: use prisma migrate deploy for prisma:migrate script
+b814874 feat: add Foundation Prisma schema, migrate, and seed
+0a69dae chore: scaffold Express TypeScript API with health check
+
+## Stat
+
+ .env.example                                       |  14 ++
+ README.md                                          |  98 ++++++++
+ package.json                                       |  56 +++++
+ .../20250915175200_foundation_init/migration.sql   | 232 +++++++++++++++++
+ .../migration.sql                                  |   2 +
+ prisma/migrations/migration_lock.toml              |   3 +
+ prisma/schema.prisma                               | 200 +++++++++++++++
+ prisma/seed.ts                                     |  69 +++++
+ scripts/smoke-foundation.ts                        | 228 +++++++++++++++++
+ src/app.ts                                         |  38 +++
+ src/config/env.ts                                  |  23 ++
+ src/lib/crypto.ts                                  |  26 ++
+ src/lib/errors.ts                                  |  23 ++
+ src/lib/logger.ts                                  |   6 +
+ src/lib/password.ts                                |  12 +
+ src/lib/prisma.ts                                  |   3 +
+ src/lib/queue.ts                                   |  31 +++
+ src/lib/redis.ts                                   |  15 ++
+ src/lib/tokens.ts                                  |  37 +++
+ src/middleware/authenticate.ts                     |  32 +++
+ src/middleware/error-handler.ts                    |  26 ++
+ src/middleware/rate-limit.ts                       | 162 ++++++++++++
+ src/middleware/require-org.ts                      |  34 +++
+ src/middleware/require-role.ts                     |  17 ++
+ src/middleware/validate.ts                         |  13 +
+ src/modules/auth/auth.routes.ts                    | 135 ++++++++++
+ src/modules/auth/auth.schemas.ts                   |  17 ++
+ src/modules/auth/auth.service.ts                   | 184 ++++++++++++++
+ src/modules/auth/refresh-store.ts                  | 109 ++++++++
+ src/modules/billing/billing.routes.ts              | 101 ++++++++
+ src/modules/billing/billing.service.ts             |  87 +++++++
+ src/modules/billing/stripe.ts                      |  23 ++
+ src/modules/billing/webhook.service.ts             | 250 ++++++++++++++++++
+ src/modules/bots/bots.service.ts                   |  23 ++
+ src/modules/orgs/orgs.routes.ts                    | 130 ++++++++++
+ src/modules/orgs/orgs.schemas.ts                   |  15 ++
+ src/modules/orgs/orgs.service.ts                   | 247 ++++++++++++++++++
+ src/modules/shops/shops.routes.ts                  | 104 ++++++++
+ src/modules/shops/shops.schemas.ts                 |   5 +
+ src/modules/shops/shops.service.ts                 | 140 +++++++++++
+ src/modules/shops/verify.service.ts                |  93 +++++++
+ src/server.ts                                      |   6 +
+ src/worker.ts                                      |   5 +
+ src/workers/shop-verify.playwright.scaffold.ts     |  11 +
+ src/workers/shop-verify.processor.ts               |  85 +++++++
+ tests/auth/auth.http.test.ts                       | 127 ++++++++++
+ tests/auth/auth.service.test.ts                    |  53 ++++
+ tests/billing/webhook.service.test.ts              | 139 ++++++++++
+ tests/health.test.ts                               |  12 +
+ tests/lib/password.test.ts                         |  11 +
+ tests/lib/tokens.test.ts                           |  27 ++
+ tests/middleware/rate-limit.test.ts                |  77 ++++++
+ tests/orgs/invites.test.ts                         | 280 +++++++++++++++++++++
+ tests/setup.ts                                     |  16 ++
+ tests/shops/connect.test.ts                        | 228 +++++++++++++++++
+ tests/shops/verify-stub.test.ts                    | 262 +++++++++++++++++++
+ tests/smoke/foundation.http.test.ts                |  21 ++
+ tsconfig.json                                      |  14 ++
+ vitest.config.ts                                   |  12 +
+ 59 files changed, 4449 insertions(+)
+
+## Diff
+
+diff --git a/.env.example b/.env.example
+new file mode 100644
+index 0000000..ef3abd4
+--- /dev/null
++++ b/.env.example
+@@ -0,0 +1,14 @@
++NODE_ENV=development
++PORT=4000
++DATABASE_URL=postgresql://user:password@localhost:5432/affiliate_tool
++REDIS_URL=redis://:password@your-vps-host:6379
++JWT_ACCESS_SECRET=change-me-access-secret-min-32-chars
++JWT_REFRESH_SECRET=change-me-refresh-secret-min-32-chars
++SESSION_VAULT_KEY=0123456789abcdef0123456789abcdef
++ACCESS_TOKEN_TTL_SEC=900
++REFRESH_TOKEN_TTL_SEC=604800
++CORS_ORIGINS=http://localhost:3000
++STRIPE_SECRET_KEY=sk_test_xxx
++STRIPE_WEBHOOK_SECRET=whsec_xxx
++SHOP_VERIFY_MODE=stub
++INVITE_TTL_SEC=604800
+diff --git a/README.md b/README.md
+new file mode 100644
+index 0000000..7819a24
+--- /dev/null
++++ b/README.md
+@@ -0,0 +1,98 @@
++# Affiliate Tool APIs (Foundation)
++
++Express + Prisma API and BullMQ worker for the affiliate tool foundation.
++
++## Prerequisites
++
++- Node.js 20+
++- PostgreSQL (local or remote)
++- Redis reachable at `REDIS_URL` (remote VPS is fine ΓÇö **no Docker required**)
++
++> **Redis note:** Auth refresh mirrors, rate limits, and the shop-verify queue use Redis.
++> Rate limiting **fails open** when Redis is unreachable so local API development still works.
++> Production must keep Redis reachable for refresh enforcement, rate limits, and workers.
++
++## Setup
++
++```bash
++cp .env.example .env
++# Edit DATABASE_URL, REDIS_URL, JWT secrets, SESSION_VAULT_KEY, CORS_ORIGINS, Stripe keys
++```
++
++### Environment (see `.env.example`)
++
++| Variable | Purpose |
++|----------|---------|
++| `DATABASE_URL` | Postgres connection string |
++| `REDIS_URL` | Redis for refresh mirror, rate limits, BullMQ |
++| `JWT_ACCESS_SECRET` / `JWT_REFRESH_SECRET` | Min 32 chars each |
++| `SESSION_VAULT_KEY` | 32-byte hex/string for session vault |
++| `CORS_ORIGINS` | Comma-separated origins (portal default `http://localhost:3000`) |
++| `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` | Billing |
++| `SHOP_VERIFY_MODE` | `stub` (default) or `playwright` |
++
++### Database
++
++```bash
++npm install
++npm run prisma:generate
++npm run prisma:migrate    # prisma migrate deploy
++npm run prisma:seed       # plans + sample bot identities
++```
++
++Free plan has `shopLimit: 0` ΓÇö bump an orgΓÇÖs `shopLimit` (or complete Stripe billing) before connecting a shop.
++
++## Run
++
++```bash
++# API (default http://localhost:4000)
++npm run dev
++
++# Worker (shop verify queue) ΓÇö needs reachable Redis
++npm run worker
++```
++
++Health check: `GET /health` ΓåÆ `{ "ok": true }`.
++
++### Portal CORS
++
++Set `CORS_ORIGINS` to the portal origin(s), e.g. `http://localhost:3000`.
++Credentials (cookies) are enabled; the portal must call the API with `credentials: "include"`.
++
++### Stripe webhooks (local)
++
++```bash
++stripe listen --forward-to localhost:4000/api/v1/webhooks/stripe
++```
++
++Copy the CLI webhook signing secret into `STRIPE_WEBHOOK_SECRET`.
++
++## Smoke script
++
++With API (+ ideally worker) running:
++
++```bash
++npm run smoke
++# or: npx tsx scripts/smoke-foundation.ts
++```
++
++Flow: register ΓåÆ bump org `shopLimit` to 1 (free plan starts at 0) ΓåÆ connect shop ΓåÆ request verify ΓåÆ poll until `ACTIVE`.
++
++If Redis/worker is unavailable, the script falls back to calling `processShopVerify` directly and documents that path in the console output.
++
++Optional gated HTTP smoke test:
++
++```bash
++SMOKE_HTTP=1 npm test -- tests/smoke/foundation.http.test.ts
++```
++
++## Scripts
++
++| Script | Description |
++|--------|-------------|
++| `npm run dev` | API with watch |
++| `npm run worker` | Shop-verify worker with watch |
++| `npm run smoke` | Foundation end-to-end smoke |
++| `npm test` | Vitest suite |
++| `npm run prisma:migrate` | `prisma migrate deploy` |
++| `npm run prisma:seed` | Seed plans/bots |
+diff --git a/package.json b/package.json
+new file mode 100644
+index 0000000..d09e38c
+--- /dev/null
++++ b/package.json
+@@ -0,0 +1,56 @@
++{
++  "name": "affiliate-tool-apis",
++  "version": "1.0.0",
++  "description": "",
++  "main": "index.js",
++  "directories": {
++    "doc": "docs",
++    "test": "tests"
++  },
++  "type": "module",
++  "scripts": {
++    "dev": "tsx watch src/server.ts",
++    "worker": "tsx watch src/worker.ts",
++    "build": "tsc -p tsconfig.json",
++    "start": "node dist/server.js",
++    "test": "vitest run",
++    "test:watch": "vitest",
++    "smoke": "tsx scripts/smoke-foundation.ts",
++    "prisma:migrate": "prisma migrate deploy",
++    "prisma:migrate:dev": "prisma migrate dev",
++    "prisma:seed": "prisma db seed",
++    "prisma:generate": "prisma generate"
++  },
++  "prisma": {
++    "seed": "tsx prisma/seed.ts"
++  },
++  "keywords": [],
++  "author": "",
++  "license": "ISC",
++  "dependencies": {
++    "@prisma/client": "^6.19.3",
++    "argon2": "^0.45.1",
++    "bullmq": "^6.3.6",
++    "cookie-parser": "^1.4.7",
++    "cors": "^2.8.6",
++    "dotenv": "^17.4.2",
++    "express": "^5.2.1",
++    "helmet": "^8.3.0",
++    "ioredis": "^6.0.0",
++    "jose": "^6.2.12",
++    "stripe": "^22.6.2",
++    "zod": "^4.6.5"
++  },
++  "devDependencies": {
++    "@types/cookie-parser": "^1.4.10",
++    "@types/cors": "^2.8.19",
++    "@types/express": "^5.0.6",
++    "@types/node": "^26.6.0",
++    "@types/supertest": "^7.2.1",
++    "prisma": "^6.19.3",
++    "supertest": "^7.2.2",
++    "tsx": "^4.23.13",
++    "typescript": "^7.0.2",
++    "vitest": "^5.0.1"
++  }
++}
+diff --git a/prisma/migrations/20250915175200_foundation_init/migration.sql b/prisma/migrations/20250915175200_foundation_init/migration.sql
+new file mode 100644
+index 0000000..bdb3e2d
+--- /dev/null
++++ b/prisma/migrations/20250915175200_foundation_init/migration.sql
+@@ -0,0 +1,232 @@
++-- CreateSchema
++CREATE SCHEMA IF NOT EXISTS "public";
++
++-- CreateEnum
++CREATE TYPE "UserStatus" AS ENUM ('ACTIVE', 'DISABLED');
++
++-- CreateEnum
++CREATE TYPE "MembershipRole" AS ENUM ('OWNER', 'ADMIN', 'MEMBER');
++
++-- CreateEnum
++CREATE TYPE "MembershipStatus" AS ENUM ('INVITED', 'ACTIVE', 'DISABLED');
++
++-- CreateEnum
++CREATE TYPE "SubscriptionStatus" AS ENUM ('TRIALING', 'ACTIVE', 'PAST_DUE', 'CANCELED', 'INCOMPLETE');
++
++-- CreateEnum
++CREATE TYPE "BotStatus" AS ENUM ('AVAILABLE', 'RESERVED', 'ASSIGNED', 'DISABLED');
++
++-- CreateEnum
++CREATE TYPE "ShopRegion" AS ENUM ('US', 'UK');
++
++-- CreateEnum
++CREATE TYPE "ShopStatus" AS ENUM ('PENDING_INVITE', 'VERIFYING', 'ACTIVE', 'FAILED', 'DISCONNECTED');
++
++-- CreateEnum
++CREATE TYPE "ShopVerifyMode" AS ENUM ('STUB', 'PLAYWRIGHT');
++
++-- CreateEnum
++CREATE TYPE "VerificationJobStatus" AS ENUM ('QUEUED', 'RUNNING', 'SUCCEEDED', 'FAILED');
++
++-- CreateTable
++CREATE TABLE "User" (
++    "id" TEXT NOT NULL,
++    "email" TEXT NOT NULL,
++    "passwordHash" TEXT NOT NULL,
++    "name" TEXT NOT NULL,
++    "status" "UserStatus" NOT NULL DEFAULT 'ACTIVE',
++    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
++    "updatedAt" TIMESTAMP(3) NOT NULL,
++
++    CONSTRAINT "User_pkey" PRIMARY KEY ("id")
++);
++
++-- CreateTable
++CREATE TABLE "Plan" (
++    "id" TEXT NOT NULL,
++    "code" TEXT NOT NULL,
++    "name" TEXT NOT NULL,
++    "monthlyPriceCents" INTEGER NOT NULL,
++    "seatLimit" INTEGER NOT NULL,
++    "shopLimit" INTEGER NOT NULL,
++    "dailyInviteQuota" INTEGER NOT NULL,
++    "stripePriceId" TEXT,
++    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
++    "updatedAt" TIMESTAMP(3) NOT NULL,
++
++    CONSTRAINT "Plan_pkey" PRIMARY KEY ("id")
++);
++
++-- CreateTable
++CREATE TABLE "Organization" (
++    "id" TEXT NOT NULL,
++    "name" TEXT NOT NULL,
++    "slug" TEXT NOT NULL,
++    "planId" TEXT NOT NULL,
++    "stripeCustomerId" TEXT,
++    "seatLimit" INTEGER NOT NULL,
++    "shopLimit" INTEGER NOT NULL,
++    "dailyInviteQuota" INTEGER NOT NULL,
++    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
++    "updatedAt" TIMESTAMP(3) NOT NULL,
++
++    CONSTRAINT "Organization_pkey" PRIMARY KEY ("id")
++);
++
++-- CreateTable
++CREATE TABLE "Membership" (
++    "id" TEXT NOT NULL,
++    "userId" TEXT NOT NULL,
++    "organizationId" TEXT NOT NULL,
++    "role" "MembershipRole" NOT NULL,
++    "status" "MembershipStatus" NOT NULL DEFAULT 'ACTIVE',
++    "inviteTokenHash" TEXT,
++    "inviteExpiresAt" TIMESTAMP(3),
++    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
++    "updatedAt" TIMESTAMP(3) NOT NULL,
++
++    CONSTRAINT "Membership_pkey" PRIMARY KEY ("id")
++);
++
++-- CreateTable
++CREATE TABLE "Subscription" (
++    "id" TEXT NOT NULL,
++    "organizationId" TEXT NOT NULL,
++    "stripeSubscriptionId" TEXT NOT NULL,
++    "status" "SubscriptionStatus" NOT NULL,
++    "currentPeriodEnd" TIMESTAMP(3),
++    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
++    "updatedAt" TIMESTAMP(3) NOT NULL,
++
++    CONSTRAINT "Subscription_pkey" PRIMARY KEY ("id")
++);
++
++-- CreateTable
++CREATE TABLE "RefreshToken" (
++    "id" TEXT NOT NULL,
++    "userId" TEXT NOT NULL,
++    "tokenHash" TEXT NOT NULL,
++    "expiresAt" TIMESTAMP(3) NOT NULL,
++    "revokedAt" TIMESTAMP(3),
++    "replacedById" TEXT,
++    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
++
++    CONSTRAINT "RefreshToken_pkey" PRIMARY KEY ("id")
++);
++
++-- CreateTable
++CREATE TABLE "BotIdentity" (
++    "id" TEXT NOT NULL,
++    "email" TEXT NOT NULL,
++    "proxyBinding" TEXT,
++    "status" "BotStatus" NOT NULL DEFAULT 'AVAILABLE',
++    "reservedForOrgId" TEXT,
++    "reservedAt" TIMESTAMP(3),
++    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
++    "updatedAt" TIMESTAMP(3) NOT NULL,
++
++    CONSTRAINT "BotIdentity_pkey" PRIMARY KEY ("id")
++);
++
++-- CreateTable
++CREATE TABLE "Shop" (
++    "id" TEXT NOT NULL,
++    "organizationId" TEXT NOT NULL,
++    "region" "ShopRegion" NOT NULL,
++    "botIdentityId" TEXT NOT NULL,
++    "externalShopId" TEXT,
++    "displayName" TEXT,
++    "status" "ShopStatus" NOT NULL DEFAULT 'PENDING_INVITE',
++    "statusReason" TEXT,
++    "sessionVaultCiphertext" TEXT,
++    "verifiedAt" TIMESTAMP(3),
++    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
++    "updatedAt" TIMESTAMP(3) NOT NULL,
++
++    CONSTRAINT "Shop_pkey" PRIMARY KEY ("id")
++);
++
++-- CreateTable
++CREATE TABLE "ShopVerificationJob" (
++    "id" TEXT NOT NULL,
++    "shopId" TEXT NOT NULL,
++    "bullJobId" TEXT,
++    "mode" "ShopVerifyMode" NOT NULL,
++    "status" "VerificationJobStatus" NOT NULL DEFAULT 'QUEUED',
++    "attempts" INTEGER NOT NULL DEFAULT 0,
++    "lastError" TEXT,
++    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
++    "updatedAt" TIMESTAMP(3) NOT NULL,
++
++    CONSTRAINT "ShopVerificationJob_pkey" PRIMARY KEY ("id")
++);
++
++-- CreateTable
++CREATE TABLE "StripeEvent" (
++    "id" TEXT NOT NULL,
++    "eventId" TEXT NOT NULL,
++    "type" TEXT NOT NULL,
++    "processedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
++
++    CONSTRAINT "StripeEvent_pkey" PRIMARY KEY ("id")
++);
++
++-- CreateIndex
++CREATE UNIQUE INDEX "User_email_key" ON "User"("email");
++
++-- CreateIndex
++CREATE UNIQUE INDEX "Plan_code_key" ON "Plan"("code");
++
++-- CreateIndex
++CREATE UNIQUE INDEX "Organization_slug_key" ON "Organization"("slug");
++
++-- CreateIndex
++CREATE INDEX "Membership_inviteTokenHash_idx" ON "Membership"("inviteTokenHash");
++
++-- CreateIndex
++CREATE UNIQUE INDEX "Membership_userId_organizationId_key" ON "Membership"("userId", "organizationId");
++
++-- CreateIndex
++CREATE UNIQUE INDEX "Subscription_organizationId_key" ON "Subscription"("organizationId");
++
++-- CreateIndex
++CREATE UNIQUE INDEX "Subscription_stripeSubscriptionId_key" ON "Subscription"("stripeSubscriptionId");
++
++-- CreateIndex
++CREATE UNIQUE INDEX "RefreshToken_tokenHash_key" ON "RefreshToken"("tokenHash");
++
++-- CreateIndex
++CREATE UNIQUE INDEX "BotIdentity_email_key" ON "BotIdentity"("email");
++
++-- CreateIndex
++CREATE UNIQUE INDEX "Shop_botIdentityId_key" ON "Shop"("botIdentityId");
++
++-- CreateIndex
++CREATE INDEX "Shop_organizationId_idx" ON "Shop"("organizationId");
++
++-- CreateIndex
++CREATE UNIQUE INDEX "StripeEvent_eventId_key" ON "StripeEvent"("eventId");
++
++-- AddForeignKey
++ALTER TABLE "Organization" ADD CONSTRAINT "Organization_planId_fkey" FOREIGN KEY ("planId") REFERENCES "Plan"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
++
++-- AddForeignKey
++ALTER TABLE "Membership" ADD CONSTRAINT "Membership_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
++
++-- AddForeignKey
++ALTER TABLE "Membership" ADD CONSTRAINT "Membership_organizationId_fkey" FOREIGN KEY ("organizationId") REFERENCES "Organization"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
++
++-- AddForeignKey
++ALTER TABLE "Subscription" ADD CONSTRAINT "Subscription_organizationId_fkey" FOREIGN KEY ("organizationId") REFERENCES "Organization"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
++
++-- AddForeignKey
++ALTER TABLE "RefreshToken" ADD CONSTRAINT "RefreshToken_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
++
++-- AddForeignKey
++ALTER TABLE "Shop" ADD CONSTRAINT "Shop_organizationId_fkey" FOREIGN KEY ("organizationId") REFERENCES "Organization"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
++
++-- AddForeignKey
++ALTER TABLE "Shop" ADD CONSTRAINT "Shop_botIdentityId_fkey" FOREIGN KEY ("botIdentityId") REFERENCES "BotIdentity"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
++
++-- AddForeignKey
++ALTER TABLE "ShopVerificationJob" ADD CONSTRAINT "ShopVerificationJob_shopId_fkey" FOREIGN KEY ("shopId") REFERENCES "Shop"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+diff --git a/prisma/migrations/20250915200000_shop_bot_identity_optional/migration.sql b/prisma/migrations/20250915200000_shop_bot_identity_optional/migration.sql
+new file mode 100644
+index 0000000..db7f0a4
+--- /dev/null
++++ b/prisma/migrations/20250915200000_shop_bot_identity_optional/migration.sql
+@@ -0,0 +1,2 @@
++-- Make Shop.botIdentityId optional so disconnect can release the bot FK
++ALTER TABLE "Shop" ALTER COLUMN "botIdentityId" DROP NOT NULL;
+diff --git a/prisma/migrations/migration_lock.toml b/prisma/migrations/migration_lock.toml
+new file mode 100644
+index 0000000..99e4f20
+--- /dev/null
++++ b/prisma/migrations/migration_lock.toml
+@@ -0,0 +1,3 @@
++# Please do not edit this file manually
++# It should be added in your version-control system (i.e. Git)
++provider = "postgresql"
+diff --git a/prisma/schema.prisma b/prisma/schema.prisma
+new file mode 100644
+index 0000000..ee2fc3a
+--- /dev/null
++++ b/prisma/schema.prisma
+@@ -0,0 +1,200 @@
++// prisma/schema.prisma
++generator client {
++  provider = "prisma-client-js"
++}
++
++datasource db {
++  provider = "postgresql"
++  url      = env("DATABASE_URL")
++}
++
++enum UserStatus {
++  ACTIVE
++  DISABLED
++}
++
++enum MembershipRole {
++  OWNER
++  ADMIN
++  MEMBER
++}
++
++enum MembershipStatus {
++  INVITED
++  ACTIVE
++  DISABLED
++}
++
++enum SubscriptionStatus {
++  TRIALING
++  ACTIVE
++  PAST_DUE
++  CANCELED
++  INCOMPLETE
++}
++
++enum BotStatus {
++  AVAILABLE
++  RESERVED
++  ASSIGNED
++  DISABLED
++}
++
++enum ShopRegion {
++  US
++  UK
++}
++
++enum ShopStatus {
++  PENDING_INVITE
++  VERIFYING
++  ACTIVE
++  FAILED
++  DISCONNECTED
++}
++
++enum ShopVerifyMode {
++  STUB
++  PLAYWRIGHT
++}
++
++enum VerificationJobStatus {
++  QUEUED
++  RUNNING
++  SUCCEEDED
++  FAILED
++}
++
++model User {
++  id           String         @id @default(cuid())
++  email        String         @unique
++  passwordHash String
++  name         String
++  status       UserStatus     @default(ACTIVE)
++  createdAt    DateTime       @default(now())
++  updatedAt    DateTime       @updatedAt
++  memberships  Membership[]
++  refreshTokens RefreshToken[]
++}
++
++model Plan {
++  id                String   @id @default(cuid())
++  code              String   @unique // starter | growth | agency | free
++  name              String
++  monthlyPriceCents Int
++  seatLimit         Int
++  shopLimit         Int
++  dailyInviteQuota  Int
++  stripePriceId     String?
++  organizations     Organization[]
++  createdAt         DateTime @default(now())
++  updatedAt         DateTime @updatedAt
++}
++
++model Organization {
++  id               String         @id @default(cuid())
++  name             String
++  slug             String         @unique
++  planId           String
++  plan             Plan           @relation(fields: [planId], references: [id])
++  stripeCustomerId String?
++  seatLimit        Int
++  shopLimit        Int
++  dailyInviteQuota Int
++  createdAt        DateTime       @default(now())
++  updatedAt        DateTime       @updatedAt
++  memberships      Membership[]
++  subscription     Subscription?
++  shops            Shop[]
++}
++
++model Membership {
++  id              String           @id @default(cuid())
++  userId          String
++  organizationId  String
++  role            MembershipRole
++  status          MembershipStatus @default(ACTIVE)
++  inviteTokenHash String?
++  inviteExpiresAt DateTime?
++  user            User             @relation(fields: [userId], references: [id])
++  organization    Organization     @relation(fields: [organizationId], references: [id])
++  createdAt       DateTime         @default(now())
++  updatedAt       DateTime         @updatedAt
++
++  @@unique([userId, organizationId])
++  @@index([inviteTokenHash])
++}
++
++model Subscription {
++  id                   String             @id @default(cuid())
++  organizationId       String             @unique
++  organization         Organization       @relation(fields: [organizationId], references: [id])
++  stripeSubscriptionId String             @unique
++  status               SubscriptionStatus
++  currentPeriodEnd     DateTime?
++  createdAt            DateTime           @default(now())
++  updatedAt            DateTime           @updatedAt
++}
++
++model RefreshToken {
++  id          String    @id @default(cuid())
++  userId      String
++  user        User      @relation(fields: [userId], references: [id])
++  tokenHash   String    @unique
++  expiresAt   DateTime
++  revokedAt   DateTime?
++  replacedById String?
++  createdAt   DateTime  @default(now())
++}
++
++model BotIdentity {
++  id              String    @id @default(cuid())
++  email           String    @unique
++  proxyBinding    String?
++  status          BotStatus @default(AVAILABLE)
++  reservedForOrgId String?
++  reservedAt      DateTime?
++  shop            Shop?
++  createdAt       DateTime  @default(now())
++  updatedAt       DateTime  @updatedAt
++}
++
++model Shop {
++  id                     String       @id @default(cuid())
++  organizationId         String
++  organization           Organization @relation(fields: [organizationId], references: [id])
++  region                 ShopRegion
++  botIdentityId          String?      @unique
++  botIdentity            BotIdentity? @relation(fields: [botIdentityId], references: [id])
++  externalShopId         String?
++  displayName            String?
++  status                 ShopStatus   @default(PENDING_INVITE)
++  statusReason           String?
++  sessionVaultCiphertext String?
++  verifiedAt             DateTime?
++  verificationJobs       ShopVerificationJob[]
++  createdAt              DateTime     @default(now())
++  updatedAt              DateTime     @updatedAt
++
++  @@index([organizationId])
++}
++
++model ShopVerificationJob {
++  id        String                @id @default(cuid())
++  shopId    String
++  shop      Shop                  @relation(fields: [shopId], references: [id])
++  bullJobId String?
++  mode      ShopVerifyMode
++  status    VerificationJobStatus @default(QUEUED)
++  attempts  Int                   @default(0)
++  lastError String?
++  createdAt DateTime              @default(now())
++  updatedAt DateTime              @updatedAt
++}
++
++model StripeEvent {
++  id          String   @id @default(cuid())
++  eventId     String   @unique
++  type        String
++  processedAt DateTime @default(now())
++}
+diff --git a/prisma/seed.ts b/prisma/seed.ts
+new file mode 100644
+index 0000000..ce3655e
+--- /dev/null
++++ b/prisma/seed.ts
+@@ -0,0 +1,69 @@
++import { PrismaClient } from "@prisma/client";
++
++const prisma = new PrismaClient();
++
++async function main() {
++  const plans = [
++    {
++      code: "free",
++      name: "Free",
++      monthlyPriceCents: 0,
++      seatLimit: 1,
++      shopLimit: 0,
++      dailyInviteQuota: 0,
++      stripePriceId: null,
++    },
++    {
++      code: "starter",
++      name: "Starter",
++      monthlyPriceCents: 4900,
++      seatLimit: 1,
++      shopLimit: 1,
++      dailyInviteQuota: 500,
++      stripePriceId: process.env.STRIPE_PRICE_STARTER ?? null,
++    },
++    {
++      code: "growth",
++      name: "Growth",
++      monthlyPriceCents: 11900,
++      seatLimit: 3,
++      shopLimit: 3,
++      dailyInviteQuota: 1500,
++      stripePriceId: process.env.STRIPE_PRICE_GROWTH ?? null,
++    },
++    {
++      code: "agency",
++      name: "Agency",
++      monthlyPriceCents: 24900,
++      seatLimit: 5,
++      shopLimit: 10,
++      dailyInviteQuota: 5000,
++      stripePriceId: process.env.STRIPE_PRICE_AGENCY ?? null,
++    },
++  ];
++
++  for (const plan of plans) {
++    await prisma.plan.upsert({
++      where: { code: plan.code },
++      create: plan,
++      update: plan,
++    });
++  }
++
++  for (let i = 1; i <= 5; i++) {
++    const email = `bot-s${i}@example.com`;
++    await prisma.botIdentity.upsert({
++      where: { email },
++      create: { email, status: "AVAILABLE" },
++      update: {},
++    });
++  }
++}
++
++main()
++  .then(() => prisma.$disconnect())
++  .catch(async (e) => {
++    console.error(e);
++    await prisma.$disconnect();
++    process.exit(1);
++  });
+diff --git a/scripts/smoke-foundation.ts b/scripts/smoke-foundation.ts
+new file mode 100644
+index 0000000..2f9825f
+--- /dev/null
++++ b/scripts/smoke-foundation.ts
+@@ -0,0 +1,228 @@
++/**
++ * Foundation smoke: register ΓåÆ bump shopLimit ΓåÆ connect ΓåÆ verify ΓåÆ poll ACTIVE.
++ *
++ * Prerequisites: API on BASE_URL (default http://localhost:4000), Postgres configured.
++ * Worker + Redis preferred for queue path; if enqueue/worker unavailable, falls back to
++ * processShopVerify() directly (documented in logs).
++ *
++ * Free plan shopLimit is 0 ΓÇö this script upserts shopLimit=1 after register.
++ *
++ * Usage: npx tsx scripts/smoke-foundation.ts
++ */
++import type { Job } from "bullmq";
++import { prisma } from "../src/lib/prisma.js";
++import { redis } from "../src/lib/redis.js";
++import {
++  processShopVerify,
++  type ShopVerifyJobData,
++} from "../src/workers/shop-verify.processor.js";
++
++const BASE_URL = process.env.SMOKE_BASE_URL ?? "http://localhost:4000";
++const POLL_MS = 500;
++const POLL_TIMEOUT_MS = 15_000;
++
++function fakeJob(
++  data: ShopVerifyJobData,
++  id = "smoke-fallback"
++): Job<ShopVerifyJobData> {
++  return { id, data } as Job<ShopVerifyJobData>;
++}
++
++async function jsonFetch(
++  path: string,
++  init: RequestInit & { token?: string } = {}
++) {
++  const headers = new Headers(init.headers);
++  headers.set("content-type", "application/json");
++  if (init.token) headers.set("authorization", `Bearer ${init.token}`);
++  const res = await fetch(`${BASE_URL}${path}`, { ...init, headers });
++  const text = await res.text();
++  let body: unknown = null;
++  try {
++    body = text ? JSON.parse(text) : null;
++  } catch {
++    body = text;
++  }
++  return { status: res.status, body };
++}
++
++function assertOk(label: string, ok: boolean, detail?: unknown): asserts ok {
++  if (!ok) {
++    console.error(`FAIL: ${label}`, detail ?? "");
++    process.exit(1);
++  }
++  console.log(`OK: ${label}`);
++}
++
++async function sleep(ms: number) {
++  await new Promise((r) => setTimeout(r, ms));
++}
++
++async function runVerifyFallback(
++  shopId: string,
++  organizationId: string,
++  verificationJobId: string | null,
++  reason: string
++) {
++  console.warn(`Fallback: ${reason}`);
++  console.warn(
++    "For production-like smoke, keep Redis reachable and run `npm run worker`."
++  );
++
++  let jobId = verificationJobId;
++  if (!jobId) {
++    await prisma.shop.update({
++      where: { id: shopId },
++      data: { status: "PENDING_INVITE", statusReason: null },
++    });
++    const created = await prisma.shopVerificationJob.create({
++      data: { shopId, mode: "STUB", status: "QUEUED" },
++    });
++    jobId = created.id;
++  } else {
++    await prisma.shopVerificationJob.update({
++      where: { id: jobId },
++      data: { status: "QUEUED", lastError: null },
++    });
++    await prisma.shop.update({
++      where: { id: shopId },
++      data: { status: "PENDING_INVITE", statusReason: null },
++    });
++  }
++
++  await processShopVerify(
++    fakeJob({
++      shopId,
++      organizationId,
++      mode: "STUB",
++      verificationJobId: jobId,
++    })
++  );
++}
++
++async function main() {
++  const suffix = Date.now();
++  const email = `smoke_${suffix}@example.com`;
++  const password = "SmokeTest123!";
++
++  console.log(`Smoke against ${BASE_URL}`);
++  console.log(
++    "Note: free plan shopLimit=0 ΓÇö will bump org shopLimit to 1 after register."
++  );
++
++  const health = await jsonFetch("/health");
++  assertOk(
++    "health",
++    health.status === 200 &&
++      (health.body as { ok?: boolean })?.ok === true,
++    health
++  );
++
++  const register = await jsonFetch("/api/v1/auth/register", {
++    method: "POST",
++    body: JSON.stringify({
++      email,
++      password,
++      name: "Smoke User",
++      organizationName: `Smoke Org ${suffix}`,
++    }),
++  });
++  assertOk("register", register.status === 201, register);
++  const regBody = register.body as {
++    accessToken: string;
++    organization: { id: string };
++  };
++  const token = regBody.accessToken;
++  const orgId = regBody.organization.id;
++
++  await prisma.organization.update({
++    where: { id: orgId },
++    data: { shopLimit: 1 },
++  });
++  console.log("OK: bumped organization.shopLimit ΓåÆ 1");
++
++  const connect = await jsonFetch("/api/v1/shops/connect", {
++    method: "POST",
++    token,
++    body: JSON.stringify({ region: "US" }),
++  });
++  assertOk("connect shop", connect.status === 201, connect);
++  const shop = connect.body as { id: string; status: string };
++  console.log(`  shopId=${shop.id} status=${shop.status}`);
++
++  const verify = await jsonFetch(`/api/v1/shops/${shop.id}/verify`, {
++    method: "POST",
++    token,
++  });
++
++  let usedFallback = false;
++  let verificationJobId: string | null = null;
++
++  if (verify.status === 200) {
++    console.log("OK: request verify");
++    const verifyBody = verify.body as {
++      verificationJobId: string;
++      status: string;
++    };
++    verificationJobId = verifyBody.verificationJobId;
++    console.log(
++      `  verificationJobId=${verificationJobId} status=${verifyBody.status}`
++    );
++
++    const started = Date.now();
++    let finalStatus = verifyBody.status;
++
++    while (Date.now() - started < POLL_TIMEOUT_MS) {
++      const get = await jsonFetch(`/api/v1/shops/${shop.id}`, { token });
++      if (get.status === 200) {
++        finalStatus = (get.body as { status: string }).status;
++        if (finalStatus === "ACTIVE") break;
++        if (finalStatus === "FAILED") break;
++      }
++      await sleep(POLL_MS);
++    }
++
++    if (finalStatus !== "ACTIVE") {
++      await runVerifyFallback(
++        shop.id,
++        orgId,
++        verificationJobId,
++        `Shop stuck at ${finalStatus} after poll ΓÇö processShopVerify() fallback`
++      );
++      usedFallback = true;
++    }
++  } else {
++    await runVerifyFallback(
++      shop.id,
++      orgId,
++      null,
++      `POST /verify returned ${verify.status} (likely Redis enqueue failure)`
++    );
++    usedFallback = true;
++  }
++
++  const get = await jsonFetch(`/api/v1/shops/${shop.id}`, { token });
++  const finalStatus =
++    get.status === 200
++      ? (get.body as { status: string }).status
++      : "UNKNOWN";
++  assertOk("shop ACTIVE", finalStatus === "ACTIVE", {
++    finalStatus,
++    usedFallback,
++  });
++  console.log(
++    usedFallback
++      ? "Smoke passed (via processShopVerify fallback)."
++      : "Smoke passed (via queue/worker)."
++  );
++}
++
++main()
++  .catch((err) => {
++    console.error(err);
++    process.exit(1);
++  })
++  .finally(async () => {
++    await prisma.$disconnect().catch(() => {});
++    if (redis.status === "ready") await redis.quit().catch(() => {});
++  });
+diff --git a/src/app.ts b/src/app.ts
+new file mode 100644
+index 0000000..a6e7569
+--- /dev/null
++++ b/src/app.ts
+@@ -0,0 +1,38 @@
++import express from "express";
++import cors from "cors";
++import helmet from "helmet";
++import cookieParser from "cookie-parser";
++import { env } from "./config/env.js";
++import { errorHandler } from "./middleware/error-handler.js";
++import { authRoutes } from "./modules/auth/auth.routes.js";
++import { orgsRoutes } from "./modules/orgs/orgs.routes.js";
++import {
++  billingRoutes,
++  billingWebhookHandler,
++} from "./modules/billing/billing.routes.js";
++import { shopsRoutes } from "./modules/shops/shops.routes.js";
++
++export function createApp() {
++  const app = express();
++  app.use(helmet());
++  app.use(
++    cors({
++      origin: env.CORS_ORIGINS.split(",").map((s) => s.trim()),
++      credentials: true,
++    })
++  );
++  app.use(cookieParser());
++  app.get("/health", (_req, res) => res.json({ ok: true }));
++  app.post(
++    "/api/v1/webhooks/stripe",
++    express.raw({ type: "application/json" }),
++    billingWebhookHandler
++  );
++  app.use(express.json());
++  app.use("/api/v1/auth", authRoutes);
++  app.use("/api/v1/orgs", orgsRoutes);
++  app.use("/api/v1/billing", billingRoutes);
++  app.use("/api/v1/shops", shopsRoutes);
++  app.use(errorHandler);
++  return app;
++}
+diff --git a/src/config/env.ts b/src/config/env.ts
+new file mode 100644
+index 0000000..e574c9f
+--- /dev/null
++++ b/src/config/env.ts
+@@ -0,0 +1,23 @@
++import "dotenv/config";
++import { z } from "zod";
++
++const schema = z.object({
++  NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
++  PORT: z.coerce.number().default(4000),
++  DATABASE_URL: z.string().min(1),
++  REDIS_URL: z.string().min(1),
++  JWT_ACCESS_SECRET: z.string().min(32),
++  JWT_REFRESH_SECRET: z.string().min(32),
++  SESSION_VAULT_KEY: z.string().min(32),
++  ACCESS_TOKEN_TTL_SEC: z.coerce.number().default(900),
++  REFRESH_TOKEN_TTL_SEC: z.coerce.number().default(604800),
++  CORS_ORIGINS: z.string().default("http://localhost:3000"),
++  STRIPE_SECRET_KEY: z.string().optional(),
++  STRIPE_WEBHOOK_SECRET: z.string().optional(),
++  SHOP_VERIFY_MODE: z.enum(["stub", "playwright"]).default("stub"),
++  INVITE_TTL_SEC: z.coerce.number().default(604800),
++});
++
++export type Env = z.infer<typeof schema>;
++
++export const env: Env = schema.parse(process.env);
+diff --git a/src/lib/crypto.ts b/src/lib/crypto.ts
+new file mode 100644
+index 0000000..a43a19a
+--- /dev/null
++++ b/src/lib/crypto.ts
+@@ -0,0 +1,26 @@
++import { createHash, createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
++import { env } from "../config/env.js";
++
++export function sha256(input: string): string {
++  return createHash("sha256").update(input).digest("hex");
++}
++
++export function encryptVault(plaintext: string): string {
++  const key = Buffer.from(env.SESSION_VAULT_KEY.slice(0, 32));
++  const iv = randomBytes(12);
++  const cipher = createCipheriv("aes-256-gcm", key, iv);
++  const enc = Buffer.concat([cipher.update(plaintext, "utf8"), cipher.final()]);
++  const tag = cipher.getAuthTag();
++  return Buffer.concat([iv, tag, enc]).toString("base64");
++}
++
++export function decryptVault(ciphertext: string): string {
++  const buf = Buffer.from(ciphertext, "base64");
++  const iv = buf.subarray(0, 12);
++  const tag = buf.subarray(12, 28);
++  const data = buf.subarray(28);
++  const key = Buffer.from(env.SESSION_VAULT_KEY.slice(0, 32));
++  const decipher = createDecipheriv("aes-256-gcm", key, iv);
++  decipher.setAuthTag(tag);
++  return Buffer.concat([decipher.update(data), decipher.final()]).toString("utf8");
++}
+diff --git a/src/lib/errors.ts b/src/lib/errors.ts
+new file mode 100644
+index 0000000..911e340
+--- /dev/null
++++ b/src/lib/errors.ts
+@@ -0,0 +1,23 @@
++export type ErrorCode =
++  | "UNAUTHORIZED"
++  | "FORBIDDEN"
++  | "VALIDATION_ERROR"
++  | "PLAN_LIMIT"
++  | "SHOP_NOT_READY"
++  | "CONFLICT"
++  | "NOT_FOUND"
++  | "RATE_LIMITED"
++  | "INTERNAL"
++  | "NOT_IMPLEMENTED";
++
++export class AppError extends Error {
++  constructor(
++    public code: ErrorCode,
++    message: string,
++    public status = 400,
++    public details?: unknown
++  ) {
++    super(message);
++    this.name = "AppError";
++  }
++}
+diff --git a/src/lib/logger.ts b/src/lib/logger.ts
+new file mode 100644
+index 0000000..848c64d
+--- /dev/null
++++ b/src/lib/logger.ts
+@@ -0,0 +1,6 @@
++export const logger = {
++  info: (msg: string, meta?: Record<string, unknown>) =>
++    console.log(JSON.stringify({ level: "info", msg, ...meta })),
++  error: (msg: string, meta?: Record<string, unknown>) =>
++    console.error(JSON.stringify({ level: "error", msg, ...meta })),
++};
+diff --git a/src/lib/password.ts b/src/lib/password.ts
+new file mode 100644
+index 0000000..504235f
+--- /dev/null
++++ b/src/lib/password.ts
+@@ -0,0 +1,12 @@
++import argon2 from "argon2";
++
++export async function hashPassword(password: string): Promise<string> {
++  return argon2.hash(password, { type: argon2.argon2id });
++}
++
++export async function verifyPassword(
++  hash: string,
++  password: string
++): Promise<boolean> {
++  return argon2.verify(hash, password);
++}
+diff --git a/src/lib/prisma.ts b/src/lib/prisma.ts
+new file mode 100644
+index 0000000..901f3a0
+--- /dev/null
++++ b/src/lib/prisma.ts
+@@ -0,0 +1,3 @@
++import { PrismaClient } from "@prisma/client";
++
++export const prisma = new PrismaClient();
+diff --git a/src/lib/queue.ts b/src/lib/queue.ts
+new file mode 100644
+index 0000000..4835a45
+--- /dev/null
++++ b/src/lib/queue.ts
+@@ -0,0 +1,31 @@
++import { Queue } from "bullmq";
++import { env } from "../config/env.js";
++
++export const SHOP_VERIFY_QUEUE = "shop-verify";
++
++export function bullConnection() {
++  const url = new URL(env.REDIS_URL);
++  return {
++    host: url.hostname,
++    port: Number(url.port || 6379),
++    password: url.password || undefined,
++    maxRetriesPerRequest: null as null,
++  };
++}
++
++let _shopVerifyQueue: Queue | null = null;
++
++/** Lazy Queue ΓÇö avoids Redis connect on import when tests call the processor directly. */
++export function getShopVerifyQueue(): Queue {
++  if (!_shopVerifyQueue) {
++    _shopVerifyQueue = new Queue(SHOP_VERIFY_QUEUE, {
++      connection: bullConnection(),
++    });
++  }
++  return _shopVerifyQueue;
++}
++
++export const shopVerifyQueue = {
++  add: (...args: Parameters<Queue["add"]>) => getShopVerifyQueue().add(...args),
++  close: () => (_shopVerifyQueue ? _shopVerifyQueue.close() : Promise.resolve()),
++};
+diff --git a/src/lib/redis.ts b/src/lib/redis.ts
+new file mode 100644
+index 0000000..df227ef
+--- /dev/null
++++ b/src/lib/redis.ts
+@@ -0,0 +1,15 @@
++import Redis from "ioredis";
++import { env } from "../config/env.js";
++
++export const redis = new Redis(env.REDIS_URL, {
++  maxRetriesPerRequest: null,
++  lazyConnect: true,
++  enableOfflineQueue: false,
++  retryStrategy(times) {
++    if (env.NODE_ENV === "test") return null;
++    return Math.min(times * 50, 2000);
++  },
++});
++
++// Prevent unhandled 'error' spam when Redis is down (e.g. local tests)
++redis.on("error", () => {});
+diff --git a/src/lib/tokens.ts b/src/lib/tokens.ts
+new file mode 100644
+index 0000000..f92686a
+--- /dev/null
++++ b/src/lib/tokens.ts
+@@ -0,0 +1,37 @@
++import { SignJWT, jwtVerify } from "jose";
++import { randomBytes } from "node:crypto";
++import { env } from "../config/env.js";
++import { sha256 } from "./crypto.js";
++
++export type AccessClaims = {
++  sub: string;
++  orgId: string;
++  role: "OWNER" | "ADMIN" | "MEMBER";
++};
++
++const accessKey = () => new TextEncoder().encode(env.JWT_ACCESS_SECRET);
++
++export async function signAccessToken(claims: AccessClaims): Promise<string> {
++  return new SignJWT({ orgId: claims.orgId, role: claims.role })
++    .setProtectedHeader({ alg: "HS256" })
++    .setSubject(claims.sub)
++    .setIssuedAt()
++    .setExpirationTime(`${env.ACCESS_TOKEN_TTL_SEC}s`)
++    .sign(accessKey());
++}
++
++export async function verifyAccessToken(token: string): Promise<AccessClaims> {
++  const { payload } = await jwtVerify(token, accessKey());
++  return {
++    sub: String(payload.sub),
++    orgId: String(payload.orgId),
++    role: payload.role as AccessClaims["role"],
++  };
++}
++
++export function generateRefreshToken(): { raw: string; hash: string } {
++  const raw = randomBytes(48).toString("base64url");
++  return { raw, hash: sha256(raw) };
++}
++
++export { sha256 };
+diff --git a/src/middleware/authenticate.ts b/src/middleware/authenticate.ts
+new file mode 100644
+index 0000000..a10198d
+--- /dev/null
++++ b/src/middleware/authenticate.ts
+@@ -0,0 +1,32 @@
++import type { RequestHandler } from "express";
++import { AppError } from "../lib/errors.js";
++import { verifyAccessToken, type AccessClaims } from "../lib/tokens.js";
++
++declare global {
++  namespace Express {
++    interface Request {
++      auth?: AccessClaims;
++    }
++  }
++}
++
++export const authenticate: RequestHandler = async (req, _res, next) => {
++  try {
++    const header = req.headers.authorization;
++    if (!header?.startsWith("Bearer ")) {
++      throw new AppError("UNAUTHORIZED", "Missing access token", 401);
++    }
++    const token = header.slice("Bearer ".length).trim();
++    if (!token) {
++      throw new AppError("UNAUTHORIZED", "Missing access token", 401);
++    }
++    req.auth = await verifyAccessToken(token);
++    next();
++  } catch (err) {
++    if (err instanceof AppError) {
++      next(err);
++      return;
++    }
++    next(new AppError("UNAUTHORIZED", "Invalid access token", 401));
++  }
++};
+diff --git a/src/middleware/error-handler.ts b/src/middleware/error-handler.ts
+new file mode 100644
+index 0000000..2c82c55
+--- /dev/null
++++ b/src/middleware/error-handler.ts
+@@ -0,0 +1,26 @@
++import type { ErrorRequestHandler } from "express";
++import { AppError } from "../lib/errors.js";
++import { ZodError } from "zod";
++
++export const errorHandler: ErrorRequestHandler = (err, _req, res, _next) => {
++  if (err instanceof AppError) {
++    res.status(err.status).json({
++      error: { code: err.code, message: err.message, details: err.details },
++    });
++    return;
++  }
++  if (err instanceof ZodError) {
++    res.status(400).json({
++      error: {
++        code: "VALIDATION_ERROR",
++        message: "Validation failed",
++        details: err.flatten(),
++      },
++    });
++    return;
++  }
++  console.error(err);
++  res.status(500).json({
++    error: { code: "INTERNAL", message: "Internal server error" },
++  });
++};
+diff --git a/src/middleware/rate-limit.ts b/src/middleware/rate-limit.ts
+new file mode 100644
+index 0000000..5cb0b94
+--- /dev/null
++++ b/src/middleware/rate-limit.ts
+@@ -0,0 +1,162 @@
++import { randomBytes } from "node:crypto";
++import type { Request, RequestHandler } from "express";
++import { AppError } from "../lib/errors.js";
++import { redis } from "../lib/redis.js";
++
++const SLIDING_WINDOW_LUA = `
++local key = KEYS[1]
++local now = tonumber(ARGV[1])
++local windowMs = tonumber(ARGV[2])
++local limit = tonumber(ARGV[3])
++local member = ARGV[4]
++local ttlSec = tonumber(ARGV[5])
++redis.call('ZREMRANGEBYSCORE', key, 0, now - windowMs)
++local count = redis.call('ZCARD', key)
++if count >= limit then
++  return 0
++end
++redis.call('ZADD', key, now, member)
++redis.call('EXPIRE', key, ttlSec)
++return 1
++`;
++
++let redisAvailable: boolean | null = null;
++
++/** Best-effort Redis readiness; never throws ΓÇö rate limit fails open. */
++async function ensureRedis(): Promise<boolean> {
++  // Prefer live ready status so Redis can recover after a prior outage.
++  if (redis.status === "ready") {
++    redisAvailable = true;
++    return true;
++  }
++  if (redisAvailable === false) return false;
++
++  if (
++    redis.status === "wait" ||
++    redis.status === "end" ||
++    redis.status === "close"
++  ) {
++    try {
++      await Promise.race([
++        redis.connect(),
++        new Promise((_, reject) =>
++          setTimeout(() => reject(new Error("Redis connect timeout")), 1500)
++        ),
++      ]);
++      if (redis.status === "ready") {
++        redisAvailable = true;
++        return true;
++      }
++    } catch {
++      redisAvailable = false;
++      return false;
++    }
++  }
++
++  if (
++    redis.status === "connecting" ||
++    redis.status === "connect" ||
++    redis.status === "reconnecting"
++  ) {
++    try {
++      await new Promise<void>((resolve, reject) => {
++        const timer = setTimeout(
++          () => reject(new Error("Redis ready timeout")),
++          1500
++        );
++        const onReady = () => {
++          clearTimeout(timer);
++          cleanup();
++          resolve();
++        };
++        const onError = (err: Error) => {
++          clearTimeout(timer);
++          cleanup();
++          reject(err);
++        };
++        const cleanup = () => {
++          redis.off("ready", onReady);
++          redis.off("error", onError);
++        };
++        redis.once("ready", onReady);
++        redis.once("error", onError);
++      });
++      redisAvailable = true;
++      return true;
++    } catch {
++      redisAvailable = false;
++      return false;
++    }
++  }
++
++  redisAvailable = false;
++  return false;
++}
++
++function clientKey(req: Request): string {
++  return req.ip || req.socket.remoteAddress || "unknown";
++}
++
++/**
++ * Redis sliding-window rate limiter.
++ * When Redis is unreachable, requests are allowed through (fail open)
++ * so local/dev API stays usable; production should keep Redis reachable.
++ */
++export function rateLimit({
++  key,
++  limit,
++  windowSec,
++}: {
++  key: (req: Request) => string;
++  limit: number;
++  windowSec: number;
++}): RequestHandler {
++  return async (req, _res, next) => {
++    try {
++      if (!(await ensureRedis())) {
++        next();
++        return;
++      }
++
++      const redisKey = `rl:${key(req)}`;
++      const now = Date.now();
++      const member = `${now}:${randomBytes(6).toString("hex")}`;
++      const allowed = (await redis.eval(
++        SLIDING_WINDOW_LUA,
++        1,
++        redisKey,
++        String(now),
++        String(windowSec * 1000),
++        String(limit),
++        member,
++        String(windowSec)
++      )) as number;
++
++      if (allowed === 0) {
++        next(
++          new AppError(
++            "RATE_LIMITED",
++            "Too many requests, please try again later",
++            429
++          )
++        );
++        return;
++      }
++
++      next();
++    } catch (err) {
++      if (err instanceof AppError) {
++        next(err);
++        return;
++      }
++      // Redis command failure ΓÇö fail open
++      redisAvailable = false;
++      next();
++    }
++  };
++}
++
++/** Default IP-based key helpers for route wiring. */
++export function rateLimitKey(prefix: string) {
++  return (req: Request) => `${prefix}:${clientKey(req)}`;
++}
+diff --git a/src/middleware/require-org.ts b/src/middleware/require-org.ts
+new file mode 100644
+index 0000000..9ab43a8
+--- /dev/null
++++ b/src/middleware/require-org.ts
+@@ -0,0 +1,34 @@
++import type { RequestHandler } from "express";
++import type { Membership } from "@prisma/client";
++import { prisma } from "../lib/prisma.js";
++import { AppError } from "../lib/errors.js";
++
++declare global {
++  namespace Express {
++    interface Request {
++      membership?: Membership;
++    }
++  }
++}
++
++export const requireOrg: RequestHandler = async (req, _res, next) => {
++  try {
++    if (!req.auth) {
++      throw new AppError("UNAUTHORIZED", "Missing access token", 401);
++    }
++    const membership = await prisma.membership.findFirst({
++      where: {
++        userId: req.auth.sub,
++        organizationId: req.auth.orgId,
++        status: "ACTIVE",
++      },
++    });
++    if (!membership) {
++      throw new AppError("FORBIDDEN", "No active membership for organization", 403);
++    }
++    req.membership = membership;
++    next();
++  } catch (err) {
++    next(err);
++  }
++};
+diff --git a/src/middleware/require-role.ts b/src/middleware/require-role.ts
+new file mode 100644
+index 0000000..14a0dad
+--- /dev/null
++++ b/src/middleware/require-role.ts
+@@ -0,0 +1,17 @@
++import type { RequestHandler } from "express";
++import type { MembershipRole } from "@prisma/client";
++import { AppError } from "../lib/errors.js";
++
++export function requireRole(...roles: MembershipRole[]): RequestHandler {
++  return (req, _res, next) => {
++    try {
++      const role = req.membership?.role ?? req.auth?.role;
++      if (!role || !roles.includes(role)) {
++        throw new AppError("FORBIDDEN", "Insufficient role", 403);
++      }
++      next();
++    } catch (err) {
++      next(err);
++    }
++  };
++}
+diff --git a/src/middleware/validate.ts b/src/middleware/validate.ts
+new file mode 100644
+index 0000000..2698aa7
+--- /dev/null
++++ b/src/middleware/validate.ts
+@@ -0,0 +1,13 @@
++import type { RequestHandler } from "express";
++import type { ZodTypeAny } from "zod";
++
++export function validateBody(schema: ZodTypeAny): RequestHandler {
++  return (req, _res, next) => {
++    try {
++      req.body = schema.parse(req.body ?? {});
++      next();
++    } catch (err) {
++      next(err);
++    }
++  };
++}
+diff --git a/src/modules/auth/auth.routes.ts b/src/modules/auth/auth.routes.ts
+new file mode 100644
+index 0000000..00bdf6e
+--- /dev/null
++++ b/src/modules/auth/auth.routes.ts
+@@ -0,0 +1,135 @@
++import { Router } from "express";
++import type { CookieOptions, Response } from "express";
++import { env } from "../../config/env.js";
++import { AppError } from "../../lib/errors.js";
++import { validateBody } from "../../middleware/validate.js";
++import { authenticate } from "../../middleware/authenticate.js";
++import { rateLimit, rateLimitKey } from "../../middleware/rate-limit.js";
++import {
++  loginSchema,
++  refreshSchema,
++  registerSchema,
++} from "./auth.schemas.js";
++import {
++  getMe,
++  login,
++  register,
++  revokeRefresh,
++  rotateRefresh,
++} from "./auth.service.js";
++import { refreshTtl } from "./refresh-store.js";
++
++export const authRoutes = Router();
++
++authRoutes.use(
++  rateLimit({
++    key: rateLimitKey("auth"),
++    limit: 20,
++    windowSec: 60,
++  })
++);
++
++function refreshCookieOptions(): CookieOptions {
++  return {
++    httpOnly: true,
++    sameSite: "lax",
++    secure: env.NODE_ENV === "production",
++    maxAge: refreshTtl() * 1000,
++    path: "/",
++  };
++}
++
++function setRefreshCookie(res: Response, refreshToken: string) {
++  res.cookie("refresh_token", refreshToken, refreshCookieOptions());
++}
++
++function clearRefreshCookie(res: Response) {
++  res.clearCookie("refresh_token", {
++    httpOnly: true,
++    sameSite: "lax",
++    secure: env.NODE_ENV === "production",
++    path: "/",
++  });
++}
++
++function rawRefreshFromRequest(req: {
++  body?: { refreshToken?: string };
++  cookies?: Record<string, string>;
++}): string {
++  const fromBody = req.body?.refreshToken;
++  const fromCookie = req.cookies?.refresh_token;
++  const raw = fromCookie || fromBody;
++  if (!raw) {
++    throw new AppError("UNAUTHORIZED", "Missing refresh token", 401);
++  }
++  return raw;
++}
++
++authRoutes.post("/register", validateBody(registerSchema), async (req, res, next) => {
++  try {
++    const result = await register(req.body);
++    setRefreshCookie(res, result.refreshToken);
++    res.status(201).json({
++      user: result.user,
++      organization: result.organization,
++      accessToken: result.accessToken,
++      refreshToken: result.refreshToken,
++    });
++  } catch (err) {
++    next(err);
++  }
++});
++
++authRoutes.post("/login", validateBody(loginSchema), async (req, res, next) => {
++  try {
++    const result = await login(req.body);
++    setRefreshCookie(res, result.refreshToken);
++    res.json({
++      user: result.user,
++      organizationId: result.organizationId,
++      accessToken: result.accessToken,
++      refreshToken: result.refreshToken,
++    });
++  } catch (err) {
++    next(err);
++  }
++});
++
++authRoutes.post("/refresh", validateBody(refreshSchema), async (req, res, next) => {
++  try {
++    const raw = rawRefreshFromRequest(req);
++    const result = await rotateRefresh(raw);
++    setRefreshCookie(res, result.refreshToken);
++    res.json({
++      accessToken: result.accessToken,
++      refreshToken: result.refreshToken,
++    });
++  } catch (err) {
++    next(err);
++  }
++});
++
++authRoutes.post("/logout", validateBody(refreshSchema), async (req, res, next) => {
++  try {
++    const raw = req.cookies?.refresh_token || req.body?.refreshToken;
++    if (raw) {
++      await revokeRefresh(raw);
++    }
++    clearRefreshCookie(res);
++    res.status(204).send();
++  } catch (err) {
++    next(err);
++  }
++});
++
++authRoutes.get("/me", authenticate, async (req, res, next) => {
++  try {
++    if (!req.auth) {
++      throw new AppError("UNAUTHORIZED", "Missing access token", 401);
++    }
++    const me = await getMe(req.auth.sub, req.auth.orgId);
++    res.json(me);
++  } catch (err) {
++    next(err);
++  }
++});
+diff --git a/src/modules/auth/auth.schemas.ts b/src/modules/auth/auth.schemas.ts
+new file mode 100644
+index 0000000..02303d9
+--- /dev/null
++++ b/src/modules/auth/auth.schemas.ts
+@@ -0,0 +1,17 @@
++import { z } from "zod";
++
++export const registerSchema = z.object({
++  email: z.string().email(),
++  password: z.string().min(8),
++  name: z.string().min(1),
++  organizationName: z.string().min(1),
++});
++
++export const loginSchema = z.object({
++  email: z.string().email(),
++  password: z.string().min(1),
++});
++
++export const refreshSchema = z.object({
++  refreshToken: z.string().min(1).optional(),
++});
+diff --git a/src/modules/auth/auth.service.ts b/src/modules/auth/auth.service.ts
+new file mode 100644
+index 0000000..d26eb68
+--- /dev/null
++++ b/src/modules/auth/auth.service.ts
+@@ -0,0 +1,184 @@
++import { prisma } from "../../lib/prisma.js";
++import { AppError } from "../../lib/errors.js";
++import { hashPassword, verifyPassword } from "../../lib/password.js";
++import {
++  generateRefreshToken,
++  signAccessToken,
++  type AccessClaims,
++} from "../../lib/tokens.js";
++import { sha256 } from "../../lib/crypto.js";
++import {
++  mirrorRefresh,
++  revokeRefreshMirror,
++  isRefreshMirrored,
++  refreshTtl,
++} from "./refresh-store.js";
++
++function slugify(name: string) {
++  return (
++    name
++      .toLowerCase()
++      .replace(/[^a-z0-9]+/g, "-")
++      .replace(/(^-|-$)/g, "")
++      .slice(0, 40) +
++    "-" +
++    Math.random().toString(36).slice(2, 8)
++  );
++}
++
++async function issueSession(claims: AccessClaims) {
++  const accessToken = await signAccessToken(claims);
++  const { raw, hash } = generateRefreshToken();
++  const expiresAt = new Date(Date.now() + refreshTtl() * 1000);
++  await prisma.refreshToken.create({
++    data: { userId: claims.sub, tokenHash: hash, expiresAt },
++  });
++  await mirrorRefresh(hash, refreshTtl());
++  return { accessToken, refreshToken: raw };
++}
++
++export async function register(input: {
++  email: string;
++  password: string;
++  name: string;
++  organizationName: string;
++}) {
++  const email = input.email.toLowerCase().trim();
++  const existing = await prisma.user.findUnique({ where: { email } });
++  if (existing) throw new AppError("CONFLICT", "Email already registered", 409);
++
++  const free = await prisma.plan.findUnique({ where: { code: "free" } });
++  if (!free) throw new AppError("INTERNAL", "Free plan missing", 500);
++
++  const passwordHash = await hashPassword(input.password);
++
++  const result = await prisma.$transaction(async (tx) => {
++    const user = await tx.user.create({
++      data: { email, passwordHash, name: input.name },
++    });
++    const organization = await tx.organization.create({
++      data: {
++        name: input.organizationName,
++        slug: slugify(input.organizationName),
++        planId: free.id,
++        seatLimit: free.seatLimit,
++        shopLimit: free.shopLimit,
++        dailyInviteQuota: free.dailyInviteQuota,
++      },
++    });
++    await tx.membership.create({
++      data: {
++        userId: user.id,
++        organizationId: organization.id,
++        role: "OWNER",
++        status: "ACTIVE",
++      },
++    });
++    return { user, organization };
++  });
++
++  const session = await issueSession({
++    sub: result.user.id,
++    orgId: result.organization.id,
++    role: "OWNER",
++  });
++
++  return {
++    user: { id: result.user.id, email: result.user.email, name: result.user.name },
++    organization: {
++      id: result.organization.id,
++      name: result.organization.name,
++      slug: result.organization.slug,
++    },
++    ...session,
++  };
++}
++
++export async function login(input: { email: string; password: string }) {
++  const email = input.email.toLowerCase().trim();
++  const user = await prisma.user.findUnique({ where: { email } });
++  if (!user || !(await verifyPassword(user.passwordHash, input.password))) {
++    throw new AppError("UNAUTHORIZED", "Invalid credentials", 401);
++  }
++  const membership = await prisma.membership.findFirst({
++    where: { userId: user.id, status: "ACTIVE" },
++    orderBy: { createdAt: "asc" },
++  });
++  if (!membership) throw new AppError("FORBIDDEN", "No active organization", 403);
++
++  const session = await issueSession({
++    sub: user.id,
++    orgId: membership.organizationId,
++    role: membership.role,
++  });
++  return {
++    user: { id: user.id, email: user.email, name: user.name },
++    organizationId: membership.organizationId,
++    ...session,
++  };
++}
++
++export async function rotateRefresh(raw: string) {
++  const hash = sha256(raw);
++  if (!(await isRefreshMirrored(hash))) {
++    throw new AppError("UNAUTHORIZED", "Invalid refresh token", 401);
++  }
++  const stored = await prisma.refreshToken.findUnique({ where: { tokenHash: hash } });
++  if (!stored || stored.revokedAt || stored.expiresAt < new Date()) {
++    throw new AppError("UNAUTHORIZED", "Invalid refresh token", 401);
++  }
++
++  const membership = await prisma.membership.findFirst({
++    where: { userId: stored.userId, status: "ACTIVE" },
++    orderBy: { createdAt: "asc" },
++  });
++  if (!membership) throw new AppError("FORBIDDEN", "No active organization", 403);
++
++  await prisma.refreshToken.update({
++    where: { id: stored.id },
++    data: { revokedAt: new Date() },
++  });
++  await revokeRefreshMirror(hash);
++
++  return issueSession({
++    sub: stored.userId,
++    orgId: membership.organizationId,
++    role: membership.role,
++  });
++}
++
++export async function revokeRefresh(raw: string) {
++  const hash = sha256(raw);
++  const stored = await prisma.refreshToken.findUnique({ where: { tokenHash: hash } });
++  if (stored && !stored.revokedAt) {
++    await prisma.refreshToken.update({
++      where: { id: stored.id },
++      data: { revokedAt: new Date() },
++    });
++  }
++  await revokeRefreshMirror(hash);
++}
++
++export async function getMe(userId: string, orgId: string) {
++  const user = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
++  const memberships = await prisma.membership.findMany({
++    where: { userId, status: "ACTIVE" },
++    include: { organization: { include: { plan: true, subscription: true } } },
++  });
++  return {
++    user: { id: user.id, email: user.email, name: user.name },
++    currentOrganizationId: orgId,
++    memberships: memberships.map((m) => ({
++      role: m.role,
++      organization: {
++        id: m.organization.id,
++        name: m.organization.name,
++        slug: m.organization.slug,
++        planCode: m.organization.plan.code,
++        seatLimit: m.organization.seatLimit,
++        shopLimit: m.organization.shopLimit,
++        subscriptionStatus: m.organization.subscription?.status ?? null,
++      },
++    })),
++  };
++}
+diff --git a/src/modules/auth/refresh-store.ts b/src/modules/auth/refresh-store.ts
+new file mode 100644
+index 0000000..10c86ba
+--- /dev/null
++++ b/src/modules/auth/refresh-store.ts
+@@ -0,0 +1,109 @@
++import { redis } from "../../lib/redis.js";
++import { env } from "../../config/env.js";
++
++/** In-process mirror used when Redis is unreachable (tests / brief outage). */
++const memory = new Map<string, number>();
++let redisAvailable: boolean | null = null;
++
++async function ensureRedis(): Promise<boolean> {
++  if (redisAvailable === false) return false;
++  if (redis.status === "ready") {
++    redisAvailable = true;
++    return true;
++  }
++
++  if (
++    redis.status === "wait" ||
++    redis.status === "end" ||
++    redis.status === "close"
++  ) {
++    try {
++      await Promise.race([
++        redis.connect(),
++        new Promise((_, reject) =>
++          setTimeout(() => reject(new Error("Redis connect timeout")), 2000)
++        ),
++      ]);
++      if (redis.status === "ready") {
++        redisAvailable = true;
++        return true;
++      }
++    } catch {
++      redisAvailable = false;
++      if (env.NODE_ENV === "test") return false;
++      throw new Error("Redis unavailable");
++    }
++  }
++
++  if (redis.status === "connecting" || redis.status === "connect" || redis.status === "reconnecting") {
++    try {
++      await new Promise<void>((resolve, reject) => {
++        const timer = setTimeout(
++          () => reject(new Error("Redis ready timeout")),
++          2000
++        );
++        const onReady = () => {
++          clearTimeout(timer);
++          cleanup();
++          resolve();
++        };
++        const onError = (err: Error) => {
++          clearTimeout(timer);
++          cleanup();
++          reject(err);
++        };
++        const cleanup = () => {
++          redis.off("ready", onReady);
++          redis.off("error", onError);
++        };
++        redis.once("ready", onReady);
++        redis.once("error", onError);
++      });
++      redisAvailable = true;
++      return true;
++    } catch {
++      redisAvailable = false;
++      if (env.NODE_ENV === "test") return false;
++      throw new Error("Redis unavailable");
++    }
++  }
++
++  redisAvailable = false;
++  if (env.NODE_ENV === "test") return false;
++  throw new Error("Redis unavailable");
++}
++
++function memoryAlive(hash: string) {
++  const exp = memory.get(hash);
++  if (!exp) return false;
++  if (exp < Date.now()) {
++    memory.delete(hash);
++    return false;
++  }
++  return true;
++}
++
++export async function mirrorRefresh(hash: string, ttlSec: number) {
++  memory.set(hash, Date.now() + ttlSec * 1000);
++  if (await ensureRedis()) {
++    await redis.set(`refresh:${hash}`, "1", "EX", ttlSec);
++  }
++}
++
++export async function revokeRefreshMirror(hash: string) {
++  memory.delete(hash);
++  if (await ensureRedis()) {
++    await redis.del(`refresh:${hash}`);
++  }
++}
++
++export async function isRefreshMirrored(hash: string) {
++  if (await ensureRedis()) {
++    return (await redis.exists(`refresh:${hash}`)) === 1;
++  }
++  return memoryAlive(hash);
++}
++
++export function refreshTtl() {
++  return env.REFRESH_TOKEN_TTL_SEC;
++}
+diff --git a/src/modules/billing/billing.routes.ts b/src/modules/billing/billing.routes.ts
+new file mode 100644
+index 0000000..0ad3ac5
+--- /dev/null
++++ b/src/modules/billing/billing.routes.ts
+@@ -0,0 +1,101 @@
++import { Router, type RequestHandler } from "express";
++import { z } from "zod";
++import { prisma } from "../../lib/prisma.js";
++import { AppError } from "../../lib/errors.js";
++import { env } from "../../config/env.js";
++import { validateBody } from "../../middleware/validate.js";
++import { authenticate } from "../../middleware/authenticate.js";
++import { requireOrg } from "../../middleware/require-org.js";
++import { requireRole } from "../../middleware/require-role.js";
++import { getStripe } from "./stripe.js";
++import { handleStripeEvent } from "./webhook.service.js";
++import {
++  createCheckoutSession,
++  createPortalSession,
++  listPlans,
++} from "./billing.service.js";
++
++const checkoutSessionSchema = z.object({
++  planCode: z.string().min(1),
++});
++
++export const billingRoutes = Router();
++
++billingRoutes.get("/plans", async (_req, res, next) => {
++  try {
++    const plans = await listPlans();
++    res.json({ plans });
++  } catch (err) {
++    next(err);
++  }
++});
++
++billingRoutes.post(
++  "/checkout-session",
++  authenticate,
++  requireOrg,
++  requireRole("OWNER", "ADMIN"),
++  validateBody(checkoutSessionSchema),
++  async (req, res, next) => {
++    try {
++      if (!req.auth) {
++        throw new AppError("UNAUTHORIZED", "Missing access token", 401);
++      }
++      const user = await prisma.user.findUniqueOrThrow({
++        where: { id: req.auth.sub },
++      });
++      const session = await createCheckoutSession({
++        organizationId: req.auth.orgId,
++        planCode: req.body.planCode,
++        actorEmail: user.email,
++      });
++      res.json(session);
++    } catch (err) {
++      next(err);
++    }
++  }
++);
++
++billingRoutes.post(
++  "/portal-session",
++  authenticate,
++  requireOrg,
++  requireRole("OWNER", "ADMIN"),
++  async (req, res, next) => {
++    try {
++      if (!req.auth) {
++        throw new AppError("UNAUTHORIZED", "Missing access token", 401);
++      }
++      const session = await createPortalSession({
++        organizationId: req.auth.orgId,
++      });
++      res.json(session);
++    } catch (err) {
++      next(err);
++    }
++  }
++);
++
++export const billingWebhookHandler: RequestHandler = async (req, res, next) => {
++  try {
++    if (!env.STRIPE_WEBHOOK_SECRET) {
++      throw new AppError("INTERNAL", "Stripe webhook secret is not configured", 500);
++    }
++    const signature = req.headers["stripe-signature"];
++    if (!signature || typeof signature !== "string") {
++      throw new AppError("UNAUTHORIZED", "Missing Stripe signature", 401);
++    }
++
++    const stripe = getStripe();
++    const event = stripe.webhooks.constructEvent(
++      req.body,
++      signature,
++      env.STRIPE_WEBHOOK_SECRET
++    );
++
++    await handleStripeEvent(event as any);
++    res.json({ received: true });
++  } catch (err) {
++    next(err);
++  }
++};
+diff --git a/src/modules/billing/billing.service.ts b/src/modules/billing/billing.service.ts
+new file mode 100644
+index 0000000..a6a8bf4
+--- /dev/null
++++ b/src/modules/billing/billing.service.ts
+@@ -0,0 +1,87 @@
++import { prisma } from "../../lib/prisma.js";
++import { AppError } from "../../lib/errors.js";
++import { getStripe, portalBaseUrl } from "./stripe.js";
++
++export async function listPlans() {
++  const plans = await prisma.plan.findMany({
++    orderBy: { monthlyPriceCents: "asc" },
++  });
++  return plans.map((p) => ({
++    id: p.id,
++    code: p.code,
++    name: p.name,
++    monthlyPriceCents: p.monthlyPriceCents,
++    seatLimit: p.seatLimit,
++    shopLimit: p.shopLimit,
++    dailyInviteQuota: p.dailyInviteQuota,
++  }));
++}
++
++export async function createCheckoutSession(input: {
++  organizationId: string;
++  planCode: string;
++  actorEmail: string;
++}) {
++  const plan = await prisma.plan.findUnique({
++    where: { code: input.planCode },
++  });
++  if (!plan) {
++    throw new AppError("NOT_FOUND", "Plan not found", 404);
++  }
++  if (!plan.stripePriceId) {
++    throw new AppError(
++      "VALIDATION_ERROR",
++      "Plan is not available for checkout",
++      400
++    );
++  }
++  if (plan.code === "free") {
++    throw new AppError(
++      "VALIDATION_ERROR",
++      "Free plan does not require checkout",
++      400
++    );
++  }
++
++  const org = await prisma.organization.findUniqueOrThrow({
++    where: { id: input.organizationId },
++  });
++
++  const stripe = getStripe();
++  const base = portalBaseUrl();
++
++  const session = await stripe.checkout.sessions.create({
++    mode: "subscription",
++    customer: org.stripeCustomerId ?? undefined,
++    customer_email: org.stripeCustomerId ? undefined : input.actorEmail,
++    line_items: [{ price: plan.stripePriceId, quantity: 1 }],
++    success_url: `${base}/billing/success`,
++    cancel_url: `${base}/billing/cancel`,
++    metadata: { organizationId: org.id },
++    client_reference_id: org.id,
++  });
++
++  return { url: session.url, id: session.id };
++}
++
++export async function createPortalSession(input: { organizationId: string }) {
++  const org = await prisma.organization.findUniqueOrThrow({
++    where: { id: input.organizationId },
++  });
++  if (!org.stripeCustomerId) {
++    throw new AppError(
++      "VALIDATION_ERROR",
++      "Organization has no Stripe customer",
++      400
++    );
++  }
++
++  const stripe = getStripe();
++  const base = portalBaseUrl();
++  const session = await stripe.billingPortal.sessions.create({
++    customer: org.stripeCustomerId,
++    return_url: `${base}/billing`,
++  });
++
++  return { url: session.url };
++}
+diff --git a/src/modules/billing/stripe.ts b/src/modules/billing/stripe.ts
+new file mode 100644
+index 0000000..dc1c5da
+--- /dev/null
++++ b/src/modules/billing/stripe.ts
+@@ -0,0 +1,23 @@
++import Stripe from "stripe";
++import { env } from "../../config/env.js";
++import { AppError } from "../../lib/errors.js";
++
++let client: Stripe | null = null;
++
++export function getStripe(): Stripe {
++  if (!env.STRIPE_SECRET_KEY) {
++    throw new AppError("INTERNAL", "Stripe is not configured", 500);
++  }
++  if (!client) {
++    client = new Stripe(env.STRIPE_SECRET_KEY);
++  }
++  return client;
++}
++
++export function portalBaseUrl(): string {
++  const origin = env.CORS_ORIGINS.split(",")[0]?.trim();
++  if (!origin) {
++    throw new AppError("INTERNAL", "CORS_ORIGINS is not configured", 500);
++  }
++  return origin.replace(/\/$/, "");
++}
+diff --git a/src/modules/billing/webhook.service.ts b/src/modules/billing/webhook.service.ts
+new file mode 100644
+index 0000000..2148ed5
+--- /dev/null
++++ b/src/modules/billing/webhook.service.ts
+@@ -0,0 +1,250 @@
++import type { SubscriptionStatus } from "@prisma/client";
++import { Prisma } from "@prisma/client";
++import { prisma } from "../../lib/prisma.js";
++import { AppError } from "../../lib/errors.js";
++
++type StripeLikeEvent = {
++  id: string;
++  type: string;
++  data: { object: Record<string, unknown> };
++};
++
++function mapSubscriptionStatus(status: string): SubscriptionStatus {
++  switch (status) {
++    case "trialing":
++      return "TRIALING";
++    case "active":
++      return "ACTIVE";
++    case "past_due":
++      return "PAST_DUE";
++    case "canceled":
++      return "CANCELED";
++    case "incomplete":
++    case "incomplete_expired":
++      return "INCOMPLETE";
++    default:
++      return "INCOMPLETE";
++  }
++}
++
++function asString(value: unknown): string | undefined {
++  return typeof value === "string" && value.length > 0 ? value : undefined;
++}
++
++function customerIdFrom(object: Record<string, unknown>): string | undefined {
++  const customer = object.customer;
++  if (typeof customer === "string") return customer;
++  if (customer && typeof customer === "object" && "id" in customer) {
++    return asString((customer as { id: unknown }).id);
++  }
++  return undefined;
++}
++
++function priceIdFromSubscription(object: Record<string, unknown>): string | undefined {
++  const items = object.items as
++    | { data?: Array<{ price?: string | { id?: string } }> }
++    | undefined;
++  const price = items?.data?.[0]?.price;
++  if (typeof price === "string") return price;
++  if (price && typeof price === "object") return asString(price.id);
++  return undefined;
++}
++
++function organizationIdFromSession(object: Record<string, unknown>): string | undefined {
++  const metadata = object.metadata as { organizationId?: unknown } | undefined;
++  return (
++    asString(object.client_reference_id) ?? asString(metadata?.organizationId)
++  );
++}
++
++async function resolveOrganization(input: {
++  stripeCustomerId?: string;
++  organizationId?: string;
++}) {
++  if (input.organizationId) {
++    const byId = await prisma.organization.findUnique({
++      where: { id: input.organizationId },
++    });
++    if (byId) return byId;
++  }
++  if (input.stripeCustomerId) {
++    return prisma.organization.findFirst({
++      where: { stripeCustomerId: input.stripeCustomerId },
++    });
++  }
++  return null;
++}
++
++async function applyPlanAndSubscription(input: {
++  organizationId: string;
++  stripeCustomerId?: string;
++  stripeSubscriptionId: string;
++  status: SubscriptionStatus;
++  currentPeriodEnd?: Date | null;
++  stripePriceId?: string;
++}) {
++  const data: {
++    stripeCustomerId?: string;
++    planId?: string;
++    seatLimit?: number;
++    shopLimit?: number;
++    dailyInviteQuota?: number;
++  } = {};
++
++  if (input.stripeCustomerId) {
++    data.stripeCustomerId = input.stripeCustomerId;
++  }
++
++  if (input.stripePriceId) {
++    const plan = await prisma.plan.findFirst({
++      where: { stripePriceId: input.stripePriceId },
++    });
++    if (plan) {
++      data.planId = plan.id;
++      data.seatLimit = plan.seatLimit;
++      data.shopLimit = plan.shopLimit;
++      data.dailyInviteQuota = plan.dailyInviteQuota;
++    }
++  }
++
++  await prisma.$transaction(async (tx) => {
++    if (Object.keys(data).length > 0) {
++      await tx.organization.update({
++        where: { id: input.organizationId },
++        data,
++      });
++    }
++
++    await tx.subscription.upsert({
++      where: { organizationId: input.organizationId },
++      create: {
++        organizationId: input.organizationId,
++        stripeSubscriptionId: input.stripeSubscriptionId,
++        status: input.status,
++        currentPeriodEnd: input.currentPeriodEnd ?? null,
++      },
++      update: {
++        stripeSubscriptionId: input.stripeSubscriptionId,
++        status: input.status,
++        currentPeriodEnd: input.currentPeriodEnd ?? null,
++      },
++    });
++  });
++}
++
++async function applyFromSubscription(object: Record<string, unknown>) {
++  const stripeSubscriptionId = asString(object.id);
++  if (!stripeSubscriptionId) {
++    throw new AppError("VALIDATION_ERROR", "Subscription missing id", 400);
++  }
++
++  const stripeCustomerId = customerIdFrom(object);
++  const metadata = object.metadata as { organizationId?: unknown } | undefined;
++  const org = await resolveOrganization({
++    stripeCustomerId,
++    organizationId: asString(metadata?.organizationId),
++  });
++  if (!org) {
++    throw new AppError("NOT_FOUND", "Organization not found for subscription", 404);
++  }
++
++  const periodEnd =
++    typeof object.current_period_end === "number"
++      ? new Date(object.current_period_end * 1000)
++      : null;
++
++  await applyPlanAndSubscription({
++    organizationId: org.id,
++    stripeCustomerId,
++    stripeSubscriptionId,
++    status: mapSubscriptionStatus(asString(object.status) ?? "incomplete"),
++    currentPeriodEnd: periodEnd,
++    stripePriceId: priceIdFromSubscription(object),
++  });
++}
++
++async function applyFromCheckoutSession(object: Record<string, unknown>) {
++  const organizationId = organizationIdFromSession(object);
++  const stripeCustomerId = customerIdFrom(object);
++  const org = await resolveOrganization({ organizationId, stripeCustomerId });
++  if (!org) {
++    throw new AppError("NOT_FOUND", "Organization not found for checkout session", 404);
++  }
++
++  if (stripeCustomerId && org.stripeCustomerId !== stripeCustomerId) {
++    await prisma.organization.update({
++      where: { id: org.id },
++      data: { stripeCustomerId },
++    });
++  }
++
++  const subscription = object.subscription;
++  if (subscription && typeof subscription === "object") {
++    await applyFromSubscription(subscription as Record<string, unknown>);
++    return;
++  }
++
++  const stripeSubscriptionId = asString(subscription);
++  if (!stripeSubscriptionId) return;
++
++  // Session only has subscription id ΓÇö record placeholder; subscription.* events fill details
++  await prisma.subscription.upsert({
++    where: { organizationId: org.id },
++    create: {
++      organizationId: org.id,
++      stripeSubscriptionId,
++      status: "INCOMPLETE",
++      currentPeriodEnd: null,
++    },
++    update: {
++      stripeSubscriptionId,
++    },
++  });
++}
++
++async function applyClaimedEvent(event: StripeLikeEvent): Promise<void> {
++  const object = event.data?.object ?? {};
++
++  if (event.type === "checkout.session.completed") {
++    await applyFromCheckoutSession(object);
++    return;
++  }
++
++  if (event.type.startsWith("customer.subscription.")) {
++    await applyFromSubscription(object);
++  }
++}
++
++/**
++ * Idempotent Stripe event processor.
++ * Claims the event id first; duplicates return without re-applying side effects.
++ * If apply fails after claim, the claim row is deleted so Stripe can retry.
++ */
++export async function handleStripeEvent(event: StripeLikeEvent): Promise<void> {
++  try {
++    await prisma.stripeEvent.create({
++      data: {
++        eventId: event.id,
++        type: event.type,
++      },
++    });
++  } catch (err) {
++    if (
++      err instanceof Prisma.PrismaClientKnownRequestError &&
++      err.code === "P2002"
++    ) {
++      return;
++    }
++    throw err;
++  }
++
++  try {
++    await applyClaimedEvent(event);
++  } catch (err) {
++    await prisma.stripeEvent.deleteMany({ where: { eventId: event.id } });
++    throw err;
++  }
++}
++
++/** Alias matching plan interface name. */
++export const applySubscriptionFromStripe = handleStripeEvent;
+diff --git a/src/modules/bots/bots.service.ts b/src/modules/bots/bots.service.ts
+new file mode 100644
+index 0000000..be7934d
+--- /dev/null
++++ b/src/modules/bots/bots.service.ts
+@@ -0,0 +1,23 @@
++import { prisma } from "../../lib/prisma.js";
++import { AppError } from "../../lib/errors.js";
++
++export async function reserveBot(organizationId: string) {
++  const bot = await prisma.botIdentity.findFirst({
++    where: { status: "AVAILABLE", shop: null },
++    orderBy: { createdAt: "asc" },
++  });
++  if (!bot) throw new AppError("CONFLICT", "No bots available", 409);
++
++  const updated = await prisma.botIdentity.updateMany({
++    where: { id: bot.id, status: "AVAILABLE" },
++    data: {
++      status: "RESERVED",
++      reservedForOrgId: organizationId,
++      reservedAt: new Date(),
++    },
++  });
++  if (updated.count !== 1) {
++    throw new AppError("CONFLICT", "Bot reservation race; retry", 409);
++  }
++  return prisma.botIdentity.findUniqueOrThrow({ where: { id: bot.id } });
++}
+diff --git a/src/modules/orgs/orgs.routes.ts b/src/modules/orgs/orgs.routes.ts
+new file mode 100644
+index 0000000..66fd909
+--- /dev/null
++++ b/src/modules/orgs/orgs.routes.ts
+@@ -0,0 +1,130 @@
++import { Router } from "express";
++import { AppError } from "../../lib/errors.js";
++import { validateBody } from "../../middleware/validate.js";
++import { authenticate } from "../../middleware/authenticate.js";
++import { requireOrg } from "../../middleware/require-org.js";
++import { requireRole } from "../../middleware/require-role.js";
++import { verifyAccessToken } from "../../lib/tokens.js";
++import {
++  acceptInviteSchema,
++  createInviteSchema,
++  patchCurrentOrgSchema,
++} from "./orgs.schemas.js";
++import {
++  acceptInvite,
++  createInvite,
++  getCurrent,
++  listMembers,
++  patchCurrent,
++} from "./orgs.service.js";
++
++export const orgsRoutes = Router();
++
++orgsRoutes.get(
++  "/current",
++  authenticate,
++  requireOrg,
++  async (req, res, next) => {
++    try {
++      if (!req.auth) {
++        throw new AppError("UNAUTHORIZED", "Missing access token", 401);
++      }
++      const org = await getCurrent(req.auth.orgId);
++      res.json(org);
++    } catch (err) {
++      next(err);
++    }
++  }
++);
++
++orgsRoutes.patch(
++  "/current",
++  authenticate,
++  requireOrg,
++  requireRole("OWNER", "ADMIN"),
++  validateBody(patchCurrentOrgSchema),
++  async (req, res, next) => {
++    try {
++      if (!req.auth) {
++        throw new AppError("UNAUTHORIZED", "Missing access token", 401);
++      }
++      const org = await patchCurrent(req.auth.orgId, req.body);
++      res.json(org);
++    } catch (err) {
++      next(err);
++    }
++  }
++);
++
++orgsRoutes.get(
++  "/current/members",
++  authenticate,
++  requireOrg,
++  async (req, res, next) => {
++    try {
++      if (!req.auth) {
++        throw new AppError("UNAUTHORIZED", "Missing access token", 401);
++      }
++      const members = await listMembers(req.auth.orgId);
++      res.json({ members });
++    } catch (err) {
++      next(err);
++    }
++  }
++);
++
++orgsRoutes.post(
++  "/current/invites",
++  authenticate,
++  requireOrg,
++  requireRole("OWNER", "ADMIN"),
++  validateBody(createInviteSchema),
++  async (req, res, next) => {
++    try {
++      if (!req.auth) {
++        throw new AppError("UNAUTHORIZED", "Missing access token", 401);
++      }
++      const result = await createInvite({
++        organizationId: req.auth.orgId,
++        actorUserId: req.auth.sub,
++        email: req.body.email,
++        role: req.body.role,
++      });
++      res.status(201).json(result);
++    } catch (err) {
++      next(err);
++    }
++  }
++);
++
++orgsRoutes.post(
++  "/invites/:token/accept",
++  validateBody(acceptInviteSchema),
++  async (req, res, next) => {
++    try {
++      let actorUserId: string | undefined;
++      const header = req.headers.authorization;
++      if (header?.startsWith("Bearer ")) {
++        const token = header.slice("Bearer ".length).trim();
++        if (token) {
++          try {
++            const claims = await verifyAccessToken(token);
++            actorUserId = claims.sub;
++          } catch {
++            // Optional auth: fall through to password+name path for stubs
++          }
++        }
++      }
++
++      const result = await acceptInvite({
++        token: String(req.params.token),
++        password: req.body.password,
++        name: req.body.name,
++        actorUserId,
++      });
++      res.json(result);
++    } catch (err) {
++      next(err);
++    }
++  }
++);
+diff --git a/src/modules/orgs/orgs.schemas.ts b/src/modules/orgs/orgs.schemas.ts
+new file mode 100644
+index 0000000..dc98c67
+--- /dev/null
++++ b/src/modules/orgs/orgs.schemas.ts
+@@ -0,0 +1,15 @@
++import { z } from "zod";
++
++export const createInviteSchema = z.object({
++  email: z.string().email(),
++  role: z.enum(["ADMIN", "MEMBER"]),
++});
++
++export const patchCurrentOrgSchema = z.object({
++  name: z.string().min(1),
++});
++
++export const acceptInviteSchema = z.object({
++  password: z.string().min(8).optional(),
++  name: z.string().min(1).optional(),
++});
+diff --git a/src/modules/orgs/orgs.service.ts b/src/modules/orgs/orgs.service.ts
+new file mode 100644
+index 0000000..3afeb2f
+--- /dev/null
++++ b/src/modules/orgs/orgs.service.ts
+@@ -0,0 +1,247 @@
++import { randomBytes } from "node:crypto";
++import type { MembershipRole } from "@prisma/client";
++import { prisma } from "../../lib/prisma.js";
++import { AppError } from "../../lib/errors.js";
++import { sha256 } from "../../lib/crypto.js";
++import { hashPassword } from "../../lib/password.js";
++import { env } from "../../config/env.js";
++
++const INVITE_STUB_NAME = "Invited";
++
++function generateInviteToken(): { raw: string; hash: string } {
++  const raw = randomBytes(32).toString("base64url");
++  return { raw, hash: sha256(raw) };
++}
++
++async function countSeats(organizationId: string): Promise<number> {
++  return prisma.membership.count({
++    where: {
++      organizationId,
++      status: { in: ["ACTIVE", "INVITED"] },
++    },
++  });
++}
++
++export async function getCurrent(organizationId: string) {
++  const org = await prisma.organization.findUniqueOrThrow({
++    where: { id: organizationId },
++    include: { plan: true, subscription: true },
++  });
++  return {
++    id: org.id,
++    name: org.name,
++    slug: org.slug,
++    seatLimit: org.seatLimit,
++    shopLimit: org.shopLimit,
++    dailyInviteQuota: org.dailyInviteQuota,
++    plan: {
++      id: org.plan.id,
++      code: org.plan.code,
++      name: org.plan.name,
++    },
++    subscriptionStatus: org.subscription?.status ?? null,
++  };
++}
++
++export async function patchCurrent(
++  organizationId: string,
++  input: { name: string }
++) {
++  const org = await prisma.organization.update({
++    where: { id: organizationId },
++    data: { name: input.name },
++    include: { plan: true, subscription: true },
++  });
++  return {
++    id: org.id,
++    name: org.name,
++    slug: org.slug,
++    seatLimit: org.seatLimit,
++    shopLimit: org.shopLimit,
++    dailyInviteQuota: org.dailyInviteQuota,
++    plan: {
++      id: org.plan.id,
++      code: org.plan.code,
++      name: org.plan.name,
++    },
++    subscriptionStatus: org.subscription?.status ?? null,
++  };
++}
++
++export async function listMembers(organizationId: string) {
++  const members = await prisma.membership.findMany({
++    where: { organizationId },
++    include: { user: true },
++    orderBy: { createdAt: "asc" },
++  });
++  return members.map((m) => ({
++    id: m.id,
++    role: m.role,
++    status: m.status,
++    user: {
++      id: m.user.id,
++      email: m.user.email,
++      name: m.user.name,
++    },
++  }));
++}
++
++export async function createInvite(input: {
++  organizationId: string;
++  actorUserId: string;
++  email: string;
++  role: Exclude<MembershipRole, "OWNER">;
++}) {
++  const email = input.email.toLowerCase().trim();
++  const org = await prisma.organization.findUniqueOrThrow({
++    where: { id: input.organizationId },
++  });
++
++  const seats = await countSeats(input.organizationId);
++  if (seats >= org.seatLimit) {
++    throw new AppError("PLAN_LIMIT", "Seat limit reached", 403);
++  }
++
++  let user = await prisma.user.findUnique({ where: { email } });
++  let createdStub = false;
++  if (!user) {
++    user = await prisma.user.create({
++      data: {
++        email,
++        passwordHash: await hashPassword(randomBytes(32).toString("base64url")),
++        name: INVITE_STUB_NAME,
++      },
++    });
++    createdStub = true;
++  }
++
++  const existing = await prisma.membership.findUnique({
++    where: {
++      userId_organizationId: {
++        userId: user.id,
++        organizationId: input.organizationId,
++      },
++    },
++  });
++  if (existing?.status === "ACTIVE") {
++    if (createdStub) {
++      await prisma.user.delete({ where: { id: user.id } }).catch(() => undefined);
++    }
++    throw new AppError("CONFLICT", "User is already a member", 409);
++  }
++  if (existing?.status === "INVITED") {
++    if (createdStub) {
++      await prisma.user.delete({ where: { id: user.id } }).catch(() => undefined);
++    }
++    throw new AppError("CONFLICT", "User already invited", 409);
++  }
++
++  const { raw, hash } = generateInviteToken();
++  const inviteExpiresAt = new Date(Date.now() + env.INVITE_TTL_SEC * 1000);
++
++  const membership = existing
++    ? await prisma.membership.update({
++        where: { id: existing.id },
++        data: {
++          role: input.role,
++          status: "INVITED",
++          inviteTokenHash: hash,
++          inviteExpiresAt,
++        },
++      })
++    : await prisma.membership.create({
++        data: {
++          userId: user.id,
++          organizationId: input.organizationId,
++          role: input.role,
++          status: "INVITED",
++          inviteTokenHash: hash,
++          inviteExpiresAt,
++        },
++      });
++
++  return {
++    inviteToken: raw,
++    membership: {
++      id: membership.id,
++      role: membership.role,
++      status: membership.status,
++      email,
++      inviteExpiresAt: membership.inviteExpiresAt,
++    },
++  };
++}
++
++export async function acceptInvite(input: {
++  token: string;
++  password?: string;
++  name?: string;
++  actorUserId?: string;
++}) {
++  const hash = sha256(input.token);
++  const membership = await prisma.membership.findFirst({
++    where: { inviteTokenHash: hash, status: "INVITED" },
++    include: { user: true },
++  });
++  if (!membership) {
++    throw new AppError("NOT_FOUND", "Invite not found", 404);
++  }
++  if (membership.inviteExpiresAt && membership.inviteExpiresAt < new Date()) {
++    throw new AppError("FORBIDDEN", "Invite expired", 403);
++  }
++
++  if (input.actorUserId) {
++    if (input.actorUserId !== membership.userId) {
++      throw new AppError(
++        "FORBIDDEN",
++        "Authenticated user does not match invite email",
++        403
++      );
++    }
++  } else if (membership.user.name === INVITE_STUB_NAME) {
++    if (!input.password || !input.name) {
++      throw new AppError(
++        "VALIDATION_ERROR",
++        "password and name are required for new users",
++        400
++      );
++    }
++    await prisma.user.update({
++      where: { id: membership.userId },
++      data: {
++        passwordHash: await hashPassword(input.password),
++        name: input.name,
++      },
++    });
++  } else {
++    throw new AppError(
++      "UNAUTHORIZED",
++      "Authentication required to accept invite",
++      401
++    );
++  }
++
++  const updated = await prisma.membership.update({
++    where: { id: membership.id },
++    data: {
++      status: "ACTIVE",
++      inviteTokenHash: null,
++      inviteExpiresAt: null,
++    },
++    include: { user: true, organization: true },
++  });
++
++  return {
++    membership: {
++      id: updated.id,
++      role: updated.role,
++      status: updated.status,
++      organizationId: updated.organizationId,
++    },
++    user: {
++      id: updated.user.id,
++      email: updated.user.email,
++      name: updated.user.name,
++    },
++  };
++}
+diff --git a/src/modules/shops/shops.routes.ts b/src/modules/shops/shops.routes.ts
+new file mode 100644
+index 0000000..f4b7741
+--- /dev/null
++++ b/src/modules/shops/shops.routes.ts
+@@ -0,0 +1,104 @@
++import { Router } from "express";
++import { AppError } from "../../lib/errors.js";
++import { validateBody } from "../../middleware/validate.js";
++import { authenticate } from "../../middleware/authenticate.js";
++import { requireOrg } from "../../middleware/require-org.js";
++import { requireRole } from "../../middleware/require-role.js";
++import { rateLimit, rateLimitKey } from "../../middleware/rate-limit.js";
++import { connectShopSchema } from "./shops.schemas.js";
++import {
++  connectShop,
++  disconnectShop,
++  getShop,
++  listShops,
++} from "./shops.service.js";
++import { requestVerify } from "./verify.service.js";
++
++export const shopsRoutes = Router();
++
++shopsRoutes.get("/", authenticate, requireOrg, async (req, res, next) => {
++  try {
++    if (!req.auth) {
++      throw new AppError("UNAUTHORIZED", "Missing access token", 401);
++    }
++    const shops = await listShops(req.auth.orgId);
++    res.json({ shops });
++  } catch (err) {
++    next(err);
++  }
++});
++
++shopsRoutes.post(
++  "/connect",
++  authenticate,
++  requireOrg,
++  requireRole("OWNER", "ADMIN"),
++  validateBody(connectShopSchema),
++  async (req, res, next) => {
++    try {
++      if (!req.auth) {
++        throw new AppError("UNAUTHORIZED", "Missing access token", 401);
++      }
++      const shop = await connectShop({
++        organizationId: req.auth.orgId,
++        region: req.body.region,
++      });
++      res.status(201).json(shop);
++    } catch (err) {
++      next(err);
++    }
++  }
++);
++
++shopsRoutes.get("/:id", authenticate, requireOrg, async (req, res, next) => {
++  try {
++    if (!req.auth) {
++      throw new AppError("UNAUTHORIZED", "Missing access token", 401);
++    }
++    const shop = await getShop(req.auth.orgId, String(req.params.id));
++    res.json(shop);
++  } catch (err) {
++    next(err);
++  }
++});
++
++shopsRoutes.post(
++  "/:id/verify",
++  rateLimit({
++    key: rateLimitKey("shop-verify"),
++    limit: 10,
++    windowSec: 60,
++  }),
++  authenticate,
++  requireOrg,
++  requireRole("OWNER", "ADMIN"),
++  async (req, res, next) => {
++    try {
++      if (!req.auth) {
++        throw new AppError("UNAUTHORIZED", "Missing access token", 401);
++      }
++      const result = await requestVerify(req.auth.orgId, String(req.params.id));
++      res.json(result);
++    } catch (err) {
++      next(err);
++    }
++  }
++);
++
++shopsRoutes.delete(
++  "/:id",
++  authenticate,
++  requireOrg,
++  requireRole("OWNER", "ADMIN"),
++  async (req, res, next) => {
++    try {
++      if (!req.auth) {
++        throw new AppError("UNAUTHORIZED", "Missing access token", 401);
++      }
++      const shop = await disconnectShop(req.auth.orgId, String(req.params.id));
++      res.json(shop);
++    } catch (err) {
++      next(err);
++    }
++  }
++);
+diff --git a/src/modules/shops/shops.schemas.ts b/src/modules/shops/shops.schemas.ts
+new file mode 100644
+index 0000000..8121c16
+--- /dev/null
++++ b/src/modules/shops/shops.schemas.ts
+@@ -0,0 +1,5 @@
++import { z } from "zod";
++
++export const connectShopSchema = z.object({
++  region: z.enum(["US", "UK"]),
++});
+diff --git a/src/modules/shops/shops.service.ts b/src/modules/shops/shops.service.ts
+new file mode 100644
+index 0000000..e420eef
+--- /dev/null
++++ b/src/modules/shops/shops.service.ts
+@@ -0,0 +1,140 @@
++import type { ShopRegion } from "@prisma/client";
++import { prisma } from "../../lib/prisma.js";
++import { AppError } from "../../lib/errors.js";
++import { reserveBot } from "../bots/bots.service.js";
++
++async function countActiveShops(organizationId: string): Promise<number> {
++  return prisma.shop.count({
++    where: {
++      organizationId,
++      status: { not: "DISCONNECTED" },
++    },
++  });
++}
++
++function toShopResponse(shop: {
++  id: string;
++  organizationId: string;
++  region: ShopRegion;
++  botIdentityId: string | null;
++  status: string;
++  statusReason: string | null;
++  displayName: string | null;
++  externalShopId: string | null;
++  verifiedAt: Date | null;
++  createdAt: Date;
++  updatedAt: Date;
++  botIdentity: { email: string } | null;
++}) {
++  return {
++    id: shop.id,
++    organizationId: shop.organizationId,
++    region: shop.region,
++    botIdentityId: shop.botIdentityId,
++    botEmail: shop.botIdentity?.email ?? null,
++    status: shop.status,
++    statusReason: shop.statusReason,
++    displayName: shop.displayName,
++    externalShopId: shop.externalShopId,
++    verifiedAt: shop.verifiedAt,
++    createdAt: shop.createdAt,
++    updatedAt: shop.updatedAt,
++  };
++}
++
++export async function connectShop(input: {
++  organizationId: string;
++  region: ShopRegion;
++}) {
++  const org = await prisma.organization.findUniqueOrThrow({
++    where: { id: input.organizationId },
++  });
++
++  const activeCount = await countActiveShops(input.organizationId);
++  if (activeCount >= org.shopLimit) {
++    throw new AppError("PLAN_LIMIT", "Shop limit reached", 403);
++  }
++
++  const bot = await reserveBot(input.organizationId);
++
++  try {
++    const shop = await prisma.shop.create({
++      data: {
++        organizationId: input.organizationId,
++        region: input.region,
++        botIdentityId: bot.id,
++        status: "PENDING_INVITE",
++      },
++      include: { botIdentity: true },
++    });
++    return toShopResponse(shop);
++  } catch (err) {
++    await prisma.botIdentity.update({
++      where: { id: bot.id },
++      data: {
++        status: "AVAILABLE",
++        reservedForOrgId: null,
++        reservedAt: null,
++      },
++    });
++    throw err;
++  }
++}
++
++export async function listShops(organizationId: string) {
++  const shops = await prisma.shop.findMany({
++    where: { organizationId },
++    include: { botIdentity: true },
++    orderBy: { createdAt: "asc" },
++  });
++  return shops.map(toShopResponse);
++}
++
++export async function getShop(organizationId: string, shopId: string) {
++  const shop = await prisma.shop.findFirst({
++    where: { id: shopId, organizationId },
++    include: { botIdentity: true },
++  });
++  if (!shop) throw new AppError("NOT_FOUND", "Shop not found", 404);
++  return toShopResponse(shop);
++}
++
++export async function disconnectShop(organizationId: string, shopId: string) {
++  const shop = await prisma.shop.findFirst({
++    where: { id: shopId, organizationId },
++    include: { botIdentity: true },
++  });
++  if (!shop) throw new AppError("NOT_FOUND", "Shop not found", 404);
++
++  if (shop.status === "DISCONNECTED") {
++    return toShopResponse(shop);
++  }
++
++  const botId = shop.botIdentityId;
++
++  const updated = await prisma.$transaction(async (tx) => {
++    const next = await tx.shop.update({
++      where: { id: shop.id },
++      data: {
++        status: "DISCONNECTED",
++        botIdentityId: null,
++      },
++      include: { botIdentity: true },
++    });
++
++    if (botId) {
++      await tx.botIdentity.update({
++        where: { id: botId },
++        data: {
++          status: "AVAILABLE",
++          reservedForOrgId: null,
++          reservedAt: null,
++        },
++      });
++    }
++
++    return next;
++  });
++
++  return toShopResponse(updated);
++}
+diff --git a/src/modules/shops/verify.service.ts b/src/modules/shops/verify.service.ts
+new file mode 100644
+index 0000000..f191c0f
+--- /dev/null
++++ b/src/modules/shops/verify.service.ts
+@@ -0,0 +1,93 @@
++import { env } from "../../config/env.js";
++import { AppError } from "../../lib/errors.js";
++import { logger } from "../../lib/logger.js";
++import { prisma } from "../../lib/prisma.js";
++import { shopVerifyQueue } from "../../lib/queue.js";
++import type { ShopVerifyJobData } from "../../workers/shop-verify.processor.js";
++
++function verifyModeFromEnv(): "STUB" | "PLAYWRIGHT" {
++  return env.SHOP_VERIFY_MODE === "playwright" ? "PLAYWRIGHT" : "STUB";
++}
++
++/** Test skip unless FORCE_SHOP_VERIFY_ENQUEUE=1 (for enqueue-failure unit tests). */
++function shouldEnqueue(): boolean {
++  if (env.NODE_ENV !== "test") return true;
++  return process.env.FORCE_SHOP_VERIFY_ENQUEUE === "1";
++}
++
++export async function requestVerify(organizationId: string, shopId: string) {
++  const shop = await prisma.shop.findFirst({
++    where: { id: shopId, organizationId },
++  });
++  if (!shop) throw new AppError("NOT_FOUND", "Shop not found", 404);
++
++  if (shop.status !== "PENDING_INVITE" && shop.status !== "FAILED") {
++    throw new AppError(
++      "SHOP_NOT_READY",
++      `Shop status ${shop.status} cannot start verify`,
++      409
++    );
++  }
++
++  const mode = verifyModeFromEnv();
++
++  const verificationJob = await prisma.shopVerificationJob.create({
++    data: {
++      shopId: shop.id,
++      mode,
++      status: "QUEUED",
++    },
++  });
++
++  const jobData: ShopVerifyJobData = {
++    shopId: shop.id,
++    organizationId,
++    mode,
++    verificationJobId: verificationJob.id,
++  };
++
++  // Intentional test skip ΓÇö leave PENDING_INVITE; processShopVerify sets VERIFYING.
++  if (!shouldEnqueue()) {
++    return {
++      verificationJobId: verificationJob.id,
++      status: "PENDING_INVITE" as const,
++    };
++  }
++
++  try {
++    const bullJob = await shopVerifyQueue.add("verify", jobData, {
++      attempts: 3,
++      backoff: { type: "exponential", delay: 2000 },
++    });
++    await prisma.shopVerificationJob.update({
++      where: { id: verificationJob.id },
++      data: { bullJobId: String(bullJob.id) },
++    });
++  } catch (err) {
++    const message = err instanceof Error ? err.message : "enqueue failed";
++    logger.error("shop-verify enqueue failed", {
++      shopId: shop.id,
++      verificationJobId: verificationJob.id,
++      err: message,
++    });
++    await prisma.shop.update({
++      where: { id: shop.id },
++      data: { status: "FAILED", statusReason: message },
++    });
++    await prisma.shopVerificationJob.update({
++      where: { id: verificationJob.id },
++      data: { status: "FAILED", lastError: message },
++    });
++    throw new AppError("INTERNAL", `Failed to enqueue shop verify: ${message}`, 503);
++  }
++
++  await prisma.shop.update({
++    where: { id: shop.id },
++    data: { status: "VERIFYING", statusReason: null },
++  });
++
++  return {
++    verificationJobId: verificationJob.id,
++    status: "VERIFYING" as const,
++  };
++}
+diff --git a/src/server.ts b/src/server.ts
+new file mode 100644
+index 0000000..4ed809a
+--- /dev/null
++++ b/src/server.ts
+@@ -0,0 +1,6 @@
++import { createApp } from "./app.js";
++import { env } from "./config/env.js";
++import { logger } from "./lib/logger.js";
++
++const app = createApp();
++app.listen(env.PORT, () => logger.info("api listening", { port: env.PORT }));
+diff --git a/src/worker.ts b/src/worker.ts
+new file mode 100644
+index 0000000..baf44b7
+--- /dev/null
++++ b/src/worker.ts
+@@ -0,0 +1,5 @@
++import { startShopVerifyWorker } from "./workers/shop-verify.processor.js";
++import { logger } from "./lib/logger.js";
++
++startShopVerifyWorker();
++logger.info("worker started");
+diff --git a/src/workers/shop-verify.playwright.scaffold.ts b/src/workers/shop-verify.playwright.scaffold.ts
+new file mode 100644
+index 0000000..d217f18
+--- /dev/null
++++ b/src/workers/shop-verify.playwright.scaffold.ts
+@@ -0,0 +1,11 @@
++import { AppError } from "../lib/errors.js";
++import type { ShopVerifyJobData } from "./shop-verify.processor.js";
++
++/** Scaffold only ΓÇö real Playwright inbox/accept/login comes later. */
++export async function runPlaywrightVerify(_data: ShopVerifyJobData): Promise<void> {
++  throw new AppError(
++    "NOT_IMPLEMENTED",
++    "Playwright shop verify is scaffolded but not implemented",
++    501
++  );
++}
+diff --git a/src/workers/shop-verify.processor.ts b/src/workers/shop-verify.processor.ts
+new file mode 100644
+index 0000000..e9e3961
+--- /dev/null
++++ b/src/workers/shop-verify.processor.ts
+@@ -0,0 +1,85 @@
++import { Worker, type Job } from "bullmq";
++import { prisma } from "../lib/prisma.js";
++import { bullConnection, SHOP_VERIFY_QUEUE } from "../lib/queue.js";
++import { runPlaywrightVerify } from "./shop-verify.playwright.scaffold.js";
++import { logger } from "../lib/logger.js";
++
++export type ShopVerifyJobData = {
++  shopId: string;
++  organizationId: string;
++  mode: "STUB" | "PLAYWRIGHT";
++  verificationJobId: string;
++};
++
++export async function processShopVerify(job: Job<ShopVerifyJobData>) {
++  const { shopId, mode, verificationJobId } = job.data;
++
++  await prisma.shopVerificationJob.update({
++    where: { id: verificationJobId },
++    data: {
++      status: "RUNNING",
++      attempts: { increment: 1 },
++      bullJobId: job.id != null ? String(job.id) : null,
++    },
++  });
++  await prisma.shop.update({
++    where: { id: shopId },
++    data: { status: "VERIFYING" },
++  });
++
++  try {
++    if (mode === "PLAYWRIGHT") {
++      await runPlaywrightVerify(job.data);
++    } else {
++      await new Promise((r) => setTimeout(r, 200));
++
++      const shop = await prisma.shop.findUniqueOrThrow({ where: { id: shopId } });
++
++      await prisma.$transaction(async (tx) => {
++        await tx.shop.update({
++          where: { id: shopId },
++          data: {
++            status: "ACTIVE",
++            verifiedAt: new Date(),
++            sessionVaultCiphertext: null,
++            statusReason: null,
++          },
++        });
++
++        if (shop.botIdentityId) {
++          await tx.botIdentity.update({
++            where: { id: shop.botIdentityId },
++            data: { status: "ASSIGNED" },
++          });
++        }
++
++        await tx.shopVerificationJob.update({
++          where: { id: verificationJobId },
++          data: { status: "SUCCEEDED" },
++        });
++      });
++    }
++  } catch (err) {
++    const message = err instanceof Error ? err.message : "verify failed";
++    await prisma.shop.update({
++      where: { id: shopId },
++      data: { status: "FAILED", statusReason: message },
++    });
++    await prisma.shopVerificationJob.update({
++      where: { id: verificationJobId },
++      data: { status: "FAILED", lastError: message },
++    });
++    throw err;
++  }
++}
++
++export function startShopVerifyWorker() {
++  const worker = new Worker(SHOP_VERIFY_QUEUE, processShopVerify, {
++    connection: bullConnection(),
++    concurrency: 5,
++  });
++  worker.on("failed", (job, err) =>
++    logger.error("shop-verify failed", { jobId: job?.id, err: err.message })
++  );
++  return worker;
++}
+diff --git a/tests/auth/auth.http.test.ts b/tests/auth/auth.http.test.ts
+new file mode 100644
+index 0000000..df83ec2
+--- /dev/null
++++ b/tests/auth/auth.http.test.ts
+@@ -0,0 +1,127 @@
++import { describe, it, expect, afterAll } from "vitest";
++import request from "supertest";
++import { createApp } from "../../src/app.js";
++import { prisma } from "../../src/lib/prisma.js";
++import { redis } from "../../src/lib/redis.js";
++
++function cookieHeaderFromSetCookie(
++  setCookie: string | string[] | undefined
++): string {
++  const parts = Array.isArray(setCookie) ? setCookie : [String(setCookie ?? "")];
++  return parts
++    .map((c) => c.split(";")[0]?.trim())
++    .filter(Boolean)
++    .join("; ");
++}
++
++describe("auth HTTP", () => {
++  const email = `http_owner_${Date.now()}@test.com`;
++  const password = "Secret123!";
++  const app = createApp();
++
++  afterAll(async () => {
++    const user = await prisma.user.findUnique({ where: { email } });
++    if (user) {
++      await prisma.refreshToken.deleteMany({ where: { userId: user.id } });
++      const memberships = await prisma.membership.findMany({
++        where: { userId: user.id },
++      });
++      const orgIds = memberships.map((m) => m.organizationId);
++      await prisma.membership.deleteMany({ where: { userId: user.id } });
++      if (orgIds.length) {
++        await prisma.organization.deleteMany({ where: { id: { in: orgIds } } });
++      }
++      await prisma.user.deleteMany({ where: { email } });
++    }
++    await prisma.$disconnect();
++    if (redis.status === "ready") await redis.quit();
++  });
++
++  it("register ΓåÆ me ΓåÆ refresh", async () => {
++    const registerRes = await request(app)
++      .post("/api/v1/auth/register")
++      .send({
++        email,
++        password,
++        name: "Ashir",
++        organizationName: "HTTP Org",
++      });
++
++    expect(registerRes.status).toBe(201);
++    expect(registerRes.body.accessToken).toBeTruthy();
++    expect(registerRes.body.refreshToken).toBeTruthy();
++    expect(registerRes.headers["set-cookie"]).toBeDefined();
++
++    const accessToken = registerRes.body.accessToken as string;
++    const refreshToken = registerRes.body.refreshToken as string;
++
++    const meRes = await request(app)
++      .get("/api/v1/auth/me")
++      .set("Authorization", `Bearer ${accessToken}`);
++
++    expect(meRes.status).toBe(200);
++    expect(meRes.body.user.email).toBe(email);
++    expect(meRes.body.memberships?.[0]?.role).toBe("OWNER");
++    expect(meRes.body.memberships?.[0]?.organization?.planCode).toBe("free");
++
++    const refreshRes = await request(app)
++      .post("/api/v1/auth/refresh")
++      .send({ refreshToken });
++
++    expect(refreshRes.status).toBe(200);
++    expect(refreshRes.body.accessToken).toBeTruthy();
++    expect(refreshRes.body.refreshToken).toBeTruthy();
++    expect(refreshRes.body.refreshToken).not.toBe(refreshToken);
++  }, 60000);
++
++  it("prefers refresh_token cookie over stale body token", async () => {
++    const email2 = `http_cookie_${Date.now()}@test.com`;
++    const registerRes = await request(app)
++      .post("/api/v1/auth/register")
++      .send({
++        email: email2,
++        password,
++        name: "Cookie Pref",
++        organizationName: "Cookie Org",
++      });
++
++    expect(registerRes.status).toBe(201);
++    const staleRefresh = registerRes.body.refreshToken as string;
++    expect(registerRes.headers["set-cookie"]).toBeDefined();
++
++    // Rotate so register token is revoked; cookie carries the valid token
++    const rotateRes = await request(app)
++      .post("/api/v1/auth/refresh")
++      .set("Cookie", cookieHeaderFromSetCookie(registerRes.headers["set-cookie"]))
++      .send({});
++
++    expect(rotateRes.status).toBe(200);
++    const cookieRefresh = rotateRes.body.refreshToken as string;
++    expect(cookieRefresh).not.toBe(staleRefresh);
++
++    // Body stale (revoked); cookie valid ΓÇö cookie must win
++    const refreshRes = await request(app)
++      .post("/api/v1/auth/refresh")
++      .set("Cookie", cookieHeaderFromSetCookie(rotateRes.headers["set-cookie"]))
++      .send({ refreshToken: staleRefresh });
++
++    expect(refreshRes.status).toBe(200);
++    expect(refreshRes.body.refreshToken).toBeTruthy();
++    expect(refreshRes.body.refreshToken).not.toBe(staleRefresh);
++    expect(refreshRes.body.refreshToken).not.toBe(cookieRefresh);
++
++    const user = await prisma.user.findUnique({ where: { email: email2 } });
++    if (user) {
++      await prisma.refreshToken.deleteMany({ where: { userId: user.id } });
++      const memberships = await prisma.membership.findMany({
++        where: { userId: user.id },
++      });
++      const orgIds = memberships.map((m) => m.organizationId);
++      await prisma.membership.deleteMany({ where: { userId: user.id } });
++      if (orgIds.length) {
++        await prisma.organization.deleteMany({ where: { id: { in: orgIds } } });
++      }
++      await prisma.user.deleteMany({ where: { email: email2 } });
++    }
++  }, 60000);
++});
+diff --git a/tests/auth/auth.service.test.ts b/tests/auth/auth.service.test.ts
+new file mode 100644
+index 0000000..1b5bbf6
+--- /dev/null
++++ b/tests/auth/auth.service.test.ts
+@@ -0,0 +1,53 @@
++import { describe, it, expect, afterAll } from "vitest";
++import { prisma } from "../../src/lib/prisma.js";
++import { register, login } from "../../src/modules/auth/auth.service.js";
++import { redis } from "../../src/lib/redis.js";
++
++describe("auth.service", () => {
++  const email = `owner_${Date.now()}@test.com`;
++
++  afterAll(async () => {
++    try {
++      const user = await prisma.user.findUnique({ where: { email } });
++      if (user) {
++        await prisma.refreshToken.deleteMany({ where: { userId: user.id } });
++        const memberships = await prisma.membership.findMany({
++          where: { userId: user.id },
++        });
++        const orgIds = memberships.map((m) => m.organizationId);
++        await prisma.membership.deleteMany({ where: { userId: user.id } });
++        if (orgIds.length) {
++          await prisma.organization.deleteMany({ where: { id: { in: orgIds } } });
++        }
++        await prisma.user.deleteMany({ where: { email } });
++      }
++    } finally {
++      await prisma.$disconnect();
++      if (redis.status === "ready") await redis.quit();
++    }
++  });
++
++  it("registers user with OWNER membership on free plan", async () => {
++    const result = await register({
++      email,
++      password: "Secret123!",
++      name: "Ashir",
++      organizationName: "Tiksly Test",
++    });
++    expect(result.user.email).toBe(email);
++    expect(result.organization.slug).toBeTruthy();
++    expect(result.accessToken).toBeTruthy();
++    expect(result.refreshToken).toBeTruthy();
++
++    const membership = await prisma.membership.findFirst({
++      where: { user: { email } },
++    });
++    expect(membership?.role).toBe("OWNER");
++    expect(membership?.status).toBe("ACTIVE");
++  }, 60000);
++
++  it("logs in with same credentials", async () => {
++    const result = await login({ email, password: "Secret123!" });
++    expect(result.accessToken).toBeTruthy();
++  }, 60000);
++});
+diff --git a/tests/billing/webhook.service.test.ts b/tests/billing/webhook.service.test.ts
+new file mode 100644
+index 0000000..6079338
+--- /dev/null
++++ b/tests/billing/webhook.service.test.ts
+@@ -0,0 +1,139 @@
++import { describe, it, expect, beforeAll, afterAll } from "vitest";
++import { prisma } from "../../src/lib/prisma.js";
++import { handleStripeEvent } from "../../src/modules/billing/webhook.service.js";
++
++describe("billing webhook service", () => {
++  const suffix = Date.now();
++  const customerId = `cus_test_${suffix}`;
++  const priceId = `price_growth_${suffix}`;
++  const subscriptionId = `sub_test_${suffix}`;
++
++  let orgId = "";
++  let growthPlanId = "";
++
++  beforeAll(async () => {
++    const free = await prisma.plan.findUniqueOrThrow({ where: { code: "free" } });
++    const growth = await prisma.plan.findUniqueOrThrow({ where: { code: "growth" } });
++    growthPlanId = growth.id;
++
++    await prisma.plan.update({
++      where: { id: growth.id },
++      data: { stripePriceId: priceId },
++    });
++
++    const org = await prisma.organization.create({
++      data: {
++        name: `Billing Org ${suffix}`,
++        slug: `billing-org-${suffix}`,
++        planId: free.id,
++        stripeCustomerId: customerId,
++        seatLimit: free.seatLimit,
++        shopLimit: free.shopLimit,
++        dailyInviteQuota: free.dailyInviteQuota,
++      },
++    });
++    orgId = org.id;
++  }, 60000);
++
++  afterAll(async () => {
++    try {
++      await prisma.subscription.deleteMany({ where: { organizationId: orgId } });
++      await prisma.organization.deleteMany({ where: { id: orgId } });
++      await prisma.stripeEvent.deleteMany({
++        where: { eventId: { startsWith: `evt_test_${suffix}` } },
++      });
++      // Restore seeded growth price id (usually null without env)
++      await prisma.plan.update({
++        where: { id: growthPlanId },
++        data: { stripePriceId: process.env.STRIPE_PRICE_GROWTH ?? null },
++      });
++    } finally {
++      await prisma.$disconnect();
++    }
++  });
++
++  it("ignores duplicate stripe event ids", async () => {
++    const event = {
++      id: `evt_test_${suffix}`,
++      type: "customer.subscription.updated",
++      data: {
++        object: {
++          id: subscriptionId,
++          status: "active",
++          customer: customerId,
++          items: { data: [{ price: { id: priceId } }] },
++          current_period_end: Math.floor(Date.now() / 1000) + 86400,
++        },
++      },
++    };
++
++    await handleStripeEvent(event as any);
++    await handleStripeEvent(event as any);
++
++    const count = await prisma.stripeEvent.count({
++      where: { eventId: event.id },
++    });
++    expect(count).toBe(1);
++
++    const org = await prisma.organization.findUniqueOrThrow({
++      where: { id: orgId },
++      include: { subscription: true, plan: true },
++    });
++    expect(org.planId).toBe(growthPlanId);
++    expect(org.plan.code).toBe("growth");
++    expect(org.seatLimit).toBe(3);
++    expect(org.shopLimit).toBe(3);
++    expect(org.dailyInviteQuota).toBe(1500);
++    expect(org.subscription?.stripeSubscriptionId).toBe(subscriptionId);
++    expect(org.subscription?.status).toBe("ACTIVE");
++  });
++
++  it("rolls back StripeEvent claim when apply fails so Stripe can retry", async () => {
++    const eventId = `evt_test_${suffix}_retry`;
++    const retrySubId = `sub_test_${suffix}_retry`;
++
++    const failingEvent = {
++      id: eventId,
++      type: "customer.subscription.updated",
++      data: {
++        object: {
++          id: retrySubId,
++          status: "active",
++          customer: `cus_unknown_${suffix}`,
++          items: { data: [{ price: { id: priceId } }] },
++          current_period_end: Math.floor(Date.now() / 1000) + 86400,
++        },
++      },
++    };
++
++    await expect(handleStripeEvent(failingEvent as any)).rejects.toMatchObject({
++      code: "NOT_FOUND",
++    });
++
++    expect(
++      await prisma.stripeEvent.count({ where: { eventId } })
++    ).toBe(0);
++
++    const successEvent = {
++      ...failingEvent,
++      data: {
++        object: {
++          ...failingEvent.data.object,
++          customer: customerId,
++        },
++      },
++    };
++
++    await handleStripeEvent(successEvent as any);
++
++    expect(
++      await prisma.stripeEvent.count({ where: { eventId } })
++    ).toBe(1);
++
++    const sub = await prisma.subscription.findUnique({
++      where: { organizationId: orgId },
++    });
++    expect(sub?.stripeSubscriptionId).toBe(retrySubId);
++    expect(sub?.status).toBe("ACTIVE");
++  });
++});
+diff --git a/tests/health.test.ts b/tests/health.test.ts
+new file mode 100644
+index 0000000..ddfdc86
+--- /dev/null
++++ b/tests/health.test.ts
+@@ -0,0 +1,12 @@
++import { describe, it, expect } from "vitest";
++import request from "supertest";
++import { createApp } from "../src/app.js";
++
++describe("GET /health", () => {
++  it("returns ok", async () => {
++    const app = createApp();
++    const res = await request(app).get("/health");
++    expect(res.status).toBe(200);
++    expect(res.body).toEqual({ ok: true });
++  });
++});
+diff --git a/tests/lib/password.test.ts b/tests/lib/password.test.ts
+new file mode 100644
+index 0000000..d0c8b6e
+--- /dev/null
++++ b/tests/lib/password.test.ts
+@@ -0,0 +1,11 @@
++import { describe, it, expect } from "vitest";
++import { hashPassword, verifyPassword } from "../../src/lib/password.js";
++
++describe("password", () => {
++  it("hashes and verifies", async () => {
++    const hash = await hashPassword("Secret123!");
++    expect(hash).not.toContain("Secret123!");
++    expect(await verifyPassword(hash, "Secret123!")).toBe(true);
++    expect(await verifyPassword(hash, "wrong")).toBe(false);
++  });
++});
+diff --git a/tests/lib/tokens.test.ts b/tests/lib/tokens.test.ts
+new file mode 100644
+index 0000000..3460f9d
+--- /dev/null
++++ b/tests/lib/tokens.test.ts
+@@ -0,0 +1,27 @@
++import { describe, it, expect } from "vitest";
++import {
++  signAccessToken,
++  verifyAccessToken,
++  generateRefreshToken,
++  sha256,
++} from "../../src/lib/tokens.js";
++
++describe("tokens", () => {
++  it("round-trips access JWT", async () => {
++    const token = await signAccessToken({
++      sub: "user1",
++      orgId: "org1",
++      role: "OWNER",
++    });
++    const claims = await verifyAccessToken(token);
++    expect(claims.sub).toBe("user1");
++    expect(claims.orgId).toBe("org1");
++    expect(claims.role).toBe("OWNER");
++  });
++
++  it("hashes refresh tokens", () => {
++    const { raw, hash } = generateRefreshToken();
++    expect(hash).toBe(sha256(raw));
++    expect(raw).not.toBe(hash);
++  });
++});
+diff --git a/tests/middleware/rate-limit.test.ts b/tests/middleware/rate-limit.test.ts
+new file mode 100644
+index 0000000..987630b
+--- /dev/null
++++ b/tests/middleware/rate-limit.test.ts
+@@ -0,0 +1,77 @@
++import { describe, it, expect, vi, beforeEach } from "vitest";
++import type { Request, Response, NextFunction } from "express";
++import { rateLimit, rateLimitKey } from "../../src/middleware/rate-limit.js";
++import { AppError } from "../../src/lib/errors.js";
++
++vi.mock("../../src/lib/redis.js", () => {
++  const redis = {
++    status: "wait" as string,
++    connect: vi.fn(async () => {
++      throw new Error("unreachable");
++    }),
++    eval: vi.fn(),
++    on: vi.fn(),
++    off: vi.fn(),
++    once: vi.fn(),
++  };
++  return { redis };
++});
++
++import { redis } from "../../src/lib/redis.js";
++
++function mockReq(ip = "127.0.0.1"): Request {
++  return { ip, socket: { remoteAddress: ip } } as Request;
++}
++
++describe("rateLimit middleware", () => {
++  beforeEach(() => {
++    vi.clearAllMocks();
++    (redis as { status: string }).status = "wait";
++  });
++
++  it("fails open when Redis is unavailable", async () => {
++    const mw = rateLimit({
++      key: rateLimitKey("auth"),
++      limit: 2,
++      windowSec: 60,
++    });
++    const next = vi.fn() as NextFunction;
++    await mw(mockReq(), {} as Response, next);
++    expect(next).toHaveBeenCalledOnce();
++    expect(next.mock.calls[0]?.[0]).toBeUndefined();
++  });
++
++  it("returns 429 AppError when over limit", async () => {
++    (redis as { status: string }).status = "ready";
++    (redis.eval as ReturnType<typeof vi.fn>).mockResolvedValue(0);
++
++    const mw = rateLimit({
++      key: rateLimitKey("auth"),
++      limit: 2,
++      windowSec: 60,
++    });
++    const next = vi.fn() as NextFunction;
++    await mw(mockReq("10.0.0.1"), {} as Response, next);
++
++    expect(next).toHaveBeenCalledOnce();
++    const err = next.mock.calls[0]?.[0];
++    expect(err).toBeInstanceOf(AppError);
++    expect((err as AppError).code).toBe("RATE_LIMITED");
++    expect((err as AppError).status).toBe(429);
++  });
++
++  it("allows when under limit", async () => {
++    (redis as { status: string }).status = "ready";
++    (redis.eval as ReturnType<typeof vi.fn>).mockResolvedValue(1);
++
++    const mw = rateLimit({
++      key: rateLimitKey("auth"),
++      limit: 20,
++      windowSec: 60,
++    });
++    const next = vi.fn() as NextFunction;
++    await mw(mockReq(), {} as Response, next);
++    expect(next).toHaveBeenCalledOnce();
++    expect(next.mock.calls[0]?.[0]).toBeUndefined();
++  });
++});
+diff --git a/tests/orgs/invites.test.ts b/tests/orgs/invites.test.ts
+new file mode 100644
+index 0000000..473911d
+--- /dev/null
++++ b/tests/orgs/invites.test.ts
+@@ -0,0 +1,280 @@
++import { describe, it, expect, beforeAll, afterAll } from "vitest";
++import request from "supertest";
++import { prisma } from "../../src/lib/prisma.js";
++import { hashPassword } from "../../src/lib/password.js";
++import { signAccessToken } from "../../src/lib/tokens.js";
++import { createApp } from "../../src/app.js";
++import {
++  acceptInvite,
++  createInvite,
++  getCurrent,
++  listMembers,
++  patchCurrent,
++} from "../../src/modules/orgs/orgs.service.js";
++import { redis } from "../../src/lib/redis.js";
++
++describe("orgs invites", () => {
++  const suffix = Date.now();
++  const ownerEmail = `org_owner_${suffix}@test.com`;
++  const inviteEmail = `va_${suffix}@test.com`;
++  const existingInviteeEmail = `existing_${suffix}@test.com`;
++  const realUserNoAuthEmail = `real_noauth_${suffix}@test.com`;
++  const roomyOwnerEmail = `roomy_owner_${suffix}@test.com`;
++
++  let limitedOrgId = "";
++  let limitedOwnerId = "";
++  let roomyOrgId = "";
++  let roomyOwnerId = "";
++  let planId = "";
++  const app = createApp();
++
++  beforeAll(async () => {
++    const free = await prisma.plan.findUniqueOrThrow({ where: { code: "free" } });
++    planId = free.id;
++
++    const owner = await prisma.user.create({
++      data: {
++        email: ownerEmail,
++        passwordHash: await hashPassword("Secret123!"),
++        name: "Owner",
++      },
++    });
++    limitedOwnerId = owner.id;
++
++    const limitedOrg = await prisma.organization.create({
++      data: {
++        name: "Seat Limited Org",
++        slug: `seat-limited-${suffix}`,
++        planId,
++        seatLimit: 1,
++        shopLimit: 0,
++        dailyInviteQuota: 0,
++      },
++    });
++    limitedOrgId = limitedOrg.id;
++
++    await prisma.membership.create({
++      data: {
++        userId: owner.id,
++        organizationId: limitedOrg.id,
++        role: "OWNER",
++        status: "ACTIVE",
++      },
++    });
++
++    const roomyOwner = await prisma.user.create({
++      data: {
++        email: roomyOwnerEmail,
++        passwordHash: await hashPassword("Secret123!"),
++        name: "Roomy Owner",
++      },
++    });
++    roomyOwnerId = roomyOwner.id;
++
++    const roomyOrg = await prisma.organization.create({
++      data: {
++        name: "Roomy Org",
++        slug: `roomy-${suffix}`,
++        planId,
++        seatLimit: 5,
++        shopLimit: 0,
++        dailyInviteQuota: 10,
++      },
++    });
++    roomyOrgId = roomyOrg.id;
++
++    await prisma.membership.create({
++      data: {
++        userId: roomyOwner.id,
++        organizationId: roomyOrg.id,
++        role: "OWNER",
++        status: "ACTIVE",
++      },
++    });
++  }, 60000);
++
++  afterAll(async () => {
++    try {
++      const emails = [
++        ownerEmail,
++        inviteEmail,
++        existingInviteeEmail,
++        realUserNoAuthEmail,
++        roomyOwnerEmail,
++      ];
++      const users = await prisma.user.findMany({
++        where: { email: { in: emails } },
++      });
++      // Also clean stub users created under invite email variants
++      const orgIds = [limitedOrgId, roomyOrgId].filter(Boolean);
++      if (orgIds.length) {
++        const memberships = await prisma.membership.findMany({
++          where: { organizationId: { in: orgIds } },
++        });
++        const memberUserIds = memberships.map((m) => m.userId);
++        await prisma.membership.deleteMany({
++          where: { organizationId: { in: orgIds } },
++        });
++        const allUserIds = [
++          ...new Set([...users.map((u) => u.id), ...memberUserIds]),
++        ];
++        if (allUserIds.length) {
++          await prisma.refreshToken.deleteMany({
++            where: { userId: { in: allUserIds } },
++          });
++          await prisma.user.deleteMany({ where: { id: { in: allUserIds } } });
++        }
++        await prisma.organization.deleteMany({ where: { id: { in: orgIds } } });
++      }
++    } finally {
++      await prisma.$disconnect();
++      if (redis.status === "ready") await redis.quit();
++    }
++  });
++
++  it("inviting beyond seatLimit throws PLAN_LIMIT", async () => {
++    await expect(
++      createInvite({
++        organizationId: limitedOrgId,
++        actorUserId: limitedOwnerId,
++        email: inviteEmail,
++        role: "MEMBER",
++      })
++    ).rejects.toMatchObject({ code: "PLAN_LIMIT" });
++  }, 60000);
++
++  it("creates invite and accepts for new user with password+name", async () => {
++    const created = await createInvite({
++      organizationId: roomyOrgId,
++      actorUserId: roomyOwnerId,
++      email: inviteEmail,
++      role: "MEMBER",
++    });
++    expect(created.inviteToken).toBeTruthy();
++    expect(created.membership.status).toBe("INVITED");
++
++    const accepted = await acceptInvite({
++      token: created.inviteToken,
++      password: "Welcome123!",
++      name: "VA User",
++    });
++    expect(accepted.membership.status).toBe("ACTIVE");
++    expect(accepted.user.name).toBe("VA User");
++    expect(accepted.user.email).toBe(inviteEmail);
++  }, 60000);
++
++  it("accepts invite when existing user is authenticated as that email", async () => {
++    const invitee = await prisma.user.create({
++      data: {
++        email: existingInviteeEmail,
++        passwordHash: await hashPassword("Secret123!"),
++        name: "Existing",
++      },
++    });
++
++    const created = await createInvite({
++      organizationId: roomyOrgId,
++      actorUserId: roomyOwnerId,
++      email: existingInviteeEmail,
++      role: "ADMIN",
++    });
++
++    const accepted = await acceptInvite({
++      token: created.inviteToken,
++      actorUserId: invitee.id,
++    });
++    expect(accepted.membership.status).toBe("ACTIVE");
++    expect(accepted.membership.role).toBe("ADMIN");
++  }, 60000);
++
++  it("rejects password+name accept for existing real users without auth", async () => {
++    const originalPassword = "OriginalPass1!";
++    const realUser = await prisma.user.create({
++      data: {
++        email: realUserNoAuthEmail,
++        passwordHash: await hashPassword(originalPassword),
++        name: "Real User",
++      },
++    });
++    const originalHash = realUser.passwordHash;
++
++    const created = await createInvite({
++      organizationId: roomyOrgId,
++      actorUserId: roomyOwnerId,
++      email: realUserNoAuthEmail,
++      role: "MEMBER",
++    });
++
++    await expect(
++      acceptInvite({
++        token: created.inviteToken,
++        password: "HackedPass9!",
++        name: "Hacker",
++      })
++    ).rejects.toMatchObject({ code: "UNAUTHORIZED" });
++
++    const unchanged = await prisma.user.findUniqueOrThrow({
++      where: { id: realUser.id },
++    });
++    expect(unchanged.passwordHash).toBe(originalHash);
++    expect(unchanged.name).toBe("Real User");
++
++    const membership = await prisma.membership.findUniqueOrThrow({
++      where: {
++        userId_organizationId: {
++          userId: realUser.id,
++          organizationId: roomyOrgId,
++        },
++      },
++    });
++    expect(membership.status).toBe("INVITED");
++  }, 60000);
++
++  it("getCurrent / patchCurrent / listMembers work", async () => {
++    const current = await getCurrent(roomyOrgId);
++    expect(current.id).toBe(roomyOrgId);
++    expect(current.plan.code).toBe("free");
++
++    const patched = await patchCurrent(roomyOrgId, { name: "Roomy Renamed" });
++    expect(patched.name).toBe("Roomy Renamed");
++
++    const members = await listMembers(roomyOrgId);
++    expect(members.length).toBeGreaterThanOrEqual(2);
++    expect(members.some((m) => m.role === "OWNER")).toBe(true);
++  }, 60000);
++
++  it("HTTP: invite requires OWNER/ADMIN and returns raw token", async () => {
++    const accessToken = await signAccessToken({
++      sub: roomyOwnerId,
++      orgId: roomyOrgId,
++      role: "OWNER",
++    });
++
++    const email = `http_invite_${suffix}@test.com`;
++    const res = await request(app)
++      .post("/api/v1/orgs/current/invites")
++      .set("Authorization", `Bearer ${accessToken}`)
++      .send({ email, role: "MEMBER" });
++
++    expect(res.status).toBe(201);
++    expect(res.body.inviteToken).toBeTruthy();
++
++    const acceptRes = await request(app)
++      .post(`/api/v1/orgs/invites/${res.body.inviteToken}/accept`)
++      .send({ password: "Welcome123!", name: "HTTP Invitee" });
++
++    expect(acceptRes.status).toBe(200);
++    expect(acceptRes.body.membership.status).toBe("ACTIVE");
++
++    const membersRes = await request(app)
++      .get("/api/v1/orgs/current/members")
++      .set("Authorization", `Bearer ${accessToken}`);
++
++    expect(membersRes.status).toBe(200);
++    expect(
++      membersRes.body.members.some(
++        (m: { user: { email: string } }) => m.user.email === email
++      )
++    ).toBe(true);
++  }, 60000);
++});
+diff --git a/tests/setup.ts b/tests/setup.ts
+new file mode 100644
+index 0000000..2510578
+--- /dev/null
++++ b/tests/setup.ts
+@@ -0,0 +1,16 @@
++import "dotenv/config";
++
++process.env.DATABASE_URL ??=
++  "postgresql://user:pass@localhost:5432/affiliate_tool_test";
++process.env.REDIS_URL ??= "redis://127.0.0.1:6379";
++// Ensure JWT/vault secrets meet env schema min length for tests
++if (!process.env.JWT_ACCESS_SECRET || process.env.JWT_ACCESS_SECRET.length < 32) {
++  process.env.JWT_ACCESS_SECRET = "test-access-secret-32-chars-minimum!!";
++}
++if (!process.env.JWT_REFRESH_SECRET || process.env.JWT_REFRESH_SECRET.length < 32) {
++  process.env.JWT_REFRESH_SECRET = "test-refresh-secret-32-chars-minimum!";
++}
++if (!process.env.SESSION_VAULT_KEY || process.env.SESSION_VAULT_KEY.length < 32) {
++  process.env.SESSION_VAULT_KEY = "12345678901234567890123456789012";
++}
++process.env.NODE_ENV = "test";
+diff --git a/tests/shops/connect.test.ts b/tests/shops/connect.test.ts
+new file mode 100644
+index 0000000..8c3f927
+--- /dev/null
++++ b/tests/shops/connect.test.ts
+@@ -0,0 +1,228 @@
++import { describe, it, expect, beforeAll, afterAll } from "vitest";
++import request from "supertest";
++import { prisma } from "../../src/lib/prisma.js";
++import { hashPassword } from "../../src/lib/password.js";
++import { signAccessToken } from "../../src/lib/tokens.js";
++import { createApp } from "../../src/app.js";
++import {
++  connectShop,
++  disconnectShop,
++  getShop,
++  listShops,
++} from "../../src/modules/shops/shops.service.js";
++import { redis } from "../../src/lib/redis.js";
++
++describe("shops connect", () => {
++  const suffix = Date.now();
++  const ownerEmail = `shop_owner_${suffix}@test.com`;
++
++  let orgId = "";
++  let ownerId = "";
++  let planId = "";
++  const app = createApp();
++  const createdShopIds: string[] = [];
++
++  beforeAll(async () => {
++    const free = await prisma.plan.findUniqueOrThrow({ where: { code: "free" } });
++    planId = free.id;
++
++    const owner = await prisma.user.create({
++      data: {
++        email: ownerEmail,
++        passwordHash: await hashPassword("Secret123!"),
++        name: "Shop Owner",
++      },
++    });
++    ownerId = owner.id;
++
++    const org = await prisma.organization.create({
++      data: {
++        name: "Shop Org",
++        slug: `shop-org-${suffix}`,
++        planId,
++        seatLimit: 1,
++        shopLimit: 0,
++        dailyInviteQuota: 0,
++      },
++    });
++    orgId = org.id;
++
++    await prisma.membership.create({
++      data: {
++        userId: owner.id,
++        organizationId: org.id,
++        role: "OWNER",
++        status: "ACTIVE",
++      },
++    });
++  }, 60000);
++
++  afterAll(async () => {
++    try {
++      if (createdShopIds.length) {
++        const shops = await prisma.shop.findMany({
++          where: { id: { in: createdShopIds } },
++        });
++        await prisma.shop.deleteMany({ where: { id: { in: createdShopIds } } });
++        const botIds = shops
++          .map((s) => s.botIdentityId)
++          .filter((id): id is string => Boolean(id));
++        if (botIds.length) {
++          await prisma.botIdentity.updateMany({
++            where: { id: { in: botIds } },
++            data: {
++              status: "AVAILABLE",
++              reservedForOrgId: null,
++              reservedAt: null,
++            },
++          });
++        }
++      }
++      if (orgId) {
++        await prisma.membership.deleteMany({ where: { organizationId: orgId } });
++        await prisma.organization.delete({ where: { id: orgId } });
++      }
++      if (ownerId) {
++        await prisma.refreshToken.deleteMany({ where: { userId: ownerId } });
++        await prisma.user.delete({ where: { id: ownerId } });
++      }
++    } finally {
++      await prisma.$disconnect();
++      if (redis.status === "ready") await redis.quit();
++    }
++  });
++
++  it("connectShop when shopLimit is 0 throws PLAN_LIMIT", async () => {
++    await expect(
++      connectShop({ organizationId: orgId, region: "US" })
++    ).rejects.toMatchObject({ code: "PLAN_LIMIT" });
++  }, 60000);
++
++  it("connects shop and reserves bot", async () => {
++    await prisma.organization.update({
++      where: { id: orgId },
++      data: { shopLimit: 1 },
++    });
++
++    const shop = await connectShop({ organizationId: orgId, region: "US" });
++    createdShopIds.push(shop.id);
++
++    expect(shop.status).toBe("PENDING_INVITE");
++    expect(shop.botEmail).toMatch(/@/);
++    expect(shop.region).toBe("US");
++  }, 60000);
++
++  it("second connect when limit 1 throws PLAN_LIMIT", async () => {
++    await expect(
++      connectShop({ organizationId: orgId, region: "UK" })
++    ).rejects.toMatchObject({ code: "PLAN_LIMIT" });
++  }, 60000);
++
++  it("listShops / getShop / disconnectShop work", async () => {
++    const listed = await listShops(orgId);
++    expect(listed.length).toBe(1);
++    expect(listed[0].botEmail).toMatch(/@/);
++
++    const detail = await getShop(orgId, listed[0].id);
++    expect(detail.id).toBe(listed[0].id);
++    expect(detail.status).toBe("PENDING_INVITE");
++    expect(detail.botIdentityId).toBeTruthy();
++    const releasedBotId = detail.botIdentityId!;
++
++    const disconnected = await disconnectShop(orgId, detail.id);
++    expect(disconnected.status).toBe("DISCONNECTED");
++    expect(disconnected.botIdentityId).toBeNull();
++    expect(disconnected.botEmail).toBeNull();
++
++    const bot = await prisma.botIdentity.findUniqueOrThrow({
++      where: { id: releasedBotId },
++    });
++    expect(bot.status).toBe("AVAILABLE");
++    expect(bot.reservedForOrgId).toBeNull();
++    expect(bot.reservedAt).toBeNull();
++  }, 60000);
++
++  it("reconnect after disconnect reuses a released bot", async () => {
++    await prisma.organization.update({
++      where: { id: orgId },
++      data: { shopLimit: 1 },
++    });
++
++    const shop = await connectShop({ organizationId: orgId, region: "US" });
++    createdShopIds.push(shop.id);
++    expect(shop.botIdentityId).toBeTruthy();
++    const firstBotId = shop.botIdentityId!;
++
++    const others = await prisma.botIdentity.findMany({
++      where: { id: { not: firstBotId }, status: "AVAILABLE" },
++      select: { id: true },
++    });
++    if (others.length) {
++      await prisma.botIdentity.updateMany({
++        where: { id: { in: others.map((b) => b.id) } },
++        data: { status: "DISABLED" },
++      });
++    }
++
++    try {
++      await disconnectShop(orgId, shop.id);
++
++      const again = await connectShop({ organizationId: orgId, region: "UK" });
++      createdShopIds.push(again.id);
++      expect(again.status).toBe("PENDING_INVITE");
++      expect(again.botIdentityId).toBe(firstBotId);
++      expect(again.botEmail).toMatch(/@/);
++    } finally {
++      if (others.length) {
++        await prisma.botIdentity.updateMany({
++          where: { id: { in: others.map((b) => b.id) } },
++          data: { status: "AVAILABLE" },
++        });
++      }
++    }
++  }, 60000);
++
++  it("HTTP: connect requires OWNER/ADMIN; members can list/get", async () => {
++    await prisma.organization.update({
++      where: { id: orgId },
++      data: { shopLimit: 2 },
++    });
++
++    const accessToken = await signAccessToken({
++      sub: ownerId,
++      orgId,
++      role: "OWNER",
++    });
++
++    const connectRes = await request(app)
++      .post("/api/v1/shops/connect")
++      .set("Authorization", `Bearer ${accessToken}`)
++      .send({ region: "UK" });
++
++    expect(connectRes.status).toBe(201);
++    expect(connectRes.body.status).toBe("PENDING_INVITE");
++    expect(connectRes.body.botEmail).toMatch(/@/);
++    createdShopIds.push(connectRes.body.id);
++
++    const listRes = await request(app)
++      .get("/api/v1/shops")
++      .set("Authorization", `Bearer ${accessToken}`);
++
++    expect(listRes.status).toBe(200);
++    expect(listRes.body.shops.length).toBeGreaterThanOrEqual(1);
++
++    const getRes = await request(app)
++      .get(`/api/v1/shops/${connectRes.body.id}`)
++      .set("Authorization", `Bearer ${accessToken}`);
++
++    expect(getRes.status).toBe(200);
++    expect(getRes.body.id).toBe(connectRes.body.id);
++
++    const delRes = await request(app)
++      .delete(`/api/v1/shops/${connectRes.body.id}`)
++      .set("Authorization", `Bearer ${accessToken}`);
++
++    expect(delRes.status).toBe(200);
++    expect(delRes.body.status).toBe("DISCONNECTED");
++  }, 60000);
++});
+diff --git a/tests/shops/verify-stub.test.ts b/tests/shops/verify-stub.test.ts
+new file mode 100644
+index 0000000..def1206
+--- /dev/null
++++ b/tests/shops/verify-stub.test.ts
+@@ -0,0 +1,262 @@
++import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
++import type { Job } from "bullmq";
++import request from "supertest";
++import { prisma } from "../../src/lib/prisma.js";
++import { hashPassword } from "../../src/lib/password.js";
++import { signAccessToken } from "../../src/lib/tokens.js";
++import { createApp } from "../../src/app.js";
++import { connectShop } from "../../src/modules/shops/shops.service.js";
++import { requestVerify } from "../../src/modules/shops/verify.service.js";
++import {
++  processShopVerify,
++  type ShopVerifyJobData,
++} from "../../src/workers/shop-verify.processor.js";
++import { runPlaywrightVerify } from "../../src/workers/shop-verify.playwright.scaffold.js";
++import { shopVerifyQueue } from "../../src/lib/queue.js";
++import { redis } from "../../src/lib/redis.js";
++
++function fakeJob(data: ShopVerifyJobData, id = "test-job"): Job<ShopVerifyJobData> {
++  return { id, data } as Job<ShopVerifyJobData>;
++}
++
++describe("shop verify stub", () => {
++  const suffix = Date.now();
++  const ownerEmail = `verify_owner_${suffix}@test.com`;
++
++  let orgId = "";
++  let ownerId = "";
++  let planId = "";
++  const app = createApp();
++  const createdShopIds: string[] = [];
++  const ownedBotIds: string[] = [];
++
++  beforeAll(async () => {
++    const free = await prisma.plan.findUniqueOrThrow({ where: { code: "free" } });
++    planId = free.id;
++
++    for (let i = 0; i < 6; i++) {
++      const bot = await prisma.botIdentity.create({
++        data: {
++          email: `verify-bot-${suffix}-${i}@test.com`,
++          status: "AVAILABLE",
++        },
++      });
++      ownedBotIds.push(bot.id);
++    }
++
++    const owner = await prisma.user.create({
++      data: {
++        email: ownerEmail,
++        passwordHash: await hashPassword("Secret123!"),
++        name: "Verify Owner",
++      },
++    });
++    ownerId = owner.id;
++
++    const org = await prisma.organization.create({
++      data: {
++        name: "Verify Org",
++        slug: `verify-org-${suffix}`,
++        planId,
++        seatLimit: 1,
++        shopLimit: 10,
++        dailyInviteQuota: 0,
++      },
++    });
++    orgId = org.id;
++
++    await prisma.membership.create({
++      data: {
++        userId: owner.id,
++        organizationId: org.id,
++        role: "OWNER",
++        status: "ACTIVE",
++      },
++    });
++  }, 60000);
++
++  afterAll(async () => {
++    try {
++      if (createdShopIds.length) {
++        await prisma.shopVerificationJob.deleteMany({
++          where: { shopId: { in: createdShopIds } },
++        });
++        const shops = await prisma.shop.findMany({
++          where: { id: { in: createdShopIds } },
++        });
++        await prisma.shop.deleteMany({ where: { id: { in: createdShopIds } } });
++        const botIds = shops
++          .map((s) => s.botIdentityId)
++          .filter((id): id is string => Boolean(id));
++        if (botIds.length) {
++          await prisma.botIdentity.updateMany({
++            where: { id: { in: botIds } },
++            data: {
++              status: "AVAILABLE",
++              reservedForOrgId: null,
++              reservedAt: null,
++            },
++          });
++        }
++      }
++      if (ownedBotIds.length) {
++        await prisma.botIdentity.deleteMany({ where: { id: { in: ownedBotIds } } });
++      }
++      if (orgId) {
++        await prisma.membership.deleteMany({ where: { organizationId: orgId } });
++        await prisma.organization.delete({ where: { id: orgId } });
++      }
++      if (ownerId) {
++        await prisma.refreshToken.deleteMany({ where: { userId: ownerId } });
++        await prisma.user.delete({ where: { id: ownerId } });
++      }
++    } finally {
++      await prisma.$disconnect();
++      if (redis.status === "ready") await redis.quit();
++    }
++  });
++
++  it("stub verify marks shop ACTIVE", async () => {
++    const shop = await connectShop({ organizationId: orgId, region: "US" });
++    createdShopIds.push(shop.id);
++
++    const verificationJob = await prisma.shopVerificationJob.create({
++      data: {
++        shopId: shop.id,
++        mode: "STUB",
++        status: "QUEUED",
++      },
++    });
++
++    await processShopVerify(
++      fakeJob({
++        shopId: shop.id,
++        organizationId: orgId,
++        mode: "STUB",
++        verificationJobId: verificationJob.id,
++      })
++    );
++
++    const updated = await prisma.shop.findUniqueOrThrow({ where: { id: shop.id } });
++    expect(updated.status).toBe("ACTIVE");
++    expect(updated.verifiedAt).toBeTruthy();
++
++    expect(shop.botIdentityId).toBeTruthy();
++    const bot = await prisma.botIdentity.findUniqueOrThrow({
++      where: { id: shop.botIdentityId! },
++    });
++    expect(bot.status).toBe("ASSIGNED");
++
++    const jobRow = await prisma.shopVerificationJob.findUniqueOrThrow({
++      where: { id: verificationJob.id },
++    });
++    expect(jobRow.status).toBe("SUCCEEDED");
++  }, 60000);
++
++  it("requestVerify rejects shops that are not PENDING_INVITE or FAILED", async () => {
++    const shop = await connectShop({ organizationId: orgId, region: "UK" });
++    createdShopIds.push(shop.id);
++
++    await prisma.shop.update({
++      where: { id: shop.id },
++      data: { status: "ACTIVE", verifiedAt: new Date() },
++    });
++
++    await expect(requestVerify(orgId, shop.id)).rejects.toMatchObject({
++      code: "SHOP_NOT_READY",
++    });
++  }, 60000);
++
++  it("requestVerify creates job; test skip leaves PENDING_INVITE", async () => {
++    const shop = await connectShop({ organizationId: orgId, region: "US" });
++    createdShopIds.push(shop.id);
++
++    const result = await requestVerify(orgId, shop.id);
++    expect(result.status).toBe("PENDING_INVITE");
++    expect(result.verificationJobId).toBeTruthy();
++
++    // Enqueue skipped in test ΓÇö shop stays PENDING_INVITE until processShopVerify.
++    const updated = await prisma.shop.findUniqueOrThrow({ where: { id: shop.id } });
++    expect(updated.status).toBe("PENDING_INVITE");
++
++    const jobRow = await prisma.shopVerificationJob.findUniqueOrThrow({
++      where: { id: result.verificationJobId },
++    });
++    expect(jobRow.status).toBe("QUEUED");
++    expect(jobRow.mode).toBe("STUB");
++  }, 60000);
++
++  it("enqueue failure marks shop FAILED (not stuck VERIFYING)", async () => {
++    const shop = await connectShop({ organizationId: orgId, region: "UK" });
++    createdShopIds.push(shop.id);
++
++    process.env.FORCE_SHOP_VERIFY_ENQUEUE = "1";
++    const addSpy = vi
++      .spyOn(shopVerifyQueue, "add")
++      .mockRejectedValue(new Error("redis down"));
++
++    try {
++      await expect(requestVerify(orgId, shop.id)).rejects.toMatchObject({
++        code: "INTERNAL",
++      });
++
++      const updated = await prisma.shop.findUniqueOrThrow({ where: { id: shop.id } });
++      expect(updated.status).toBe("FAILED");
++      expect(updated.status).not.toBe("VERIFYING");
++      expect(updated.statusReason).toMatch(/redis down/i);
++
++      const jobRow = await prisma.shopVerificationJob.findFirstOrThrow({
++        where: { shopId: shop.id },
++        orderBy: { createdAt: "desc" },
++      });
++      expect(jobRow.status).toBe("FAILED");
++      expect(jobRow.lastError).toMatch(/redis down/i);
++
++      // Can re-verify after FAILED
++      delete process.env.FORCE_SHOP_VERIFY_ENQUEUE;
++      addSpy.mockRestore();
++      const again = await requestVerify(orgId, shop.id);
++      expect(again.verificationJobId).toBeTruthy();
++      expect(again.status).toBe("PENDING_INVITE");
++    } finally {
++      delete process.env.FORCE_SHOP_VERIFY_ENQUEUE;
++      addSpy.mockRestore();
++    }
++  }, 60000);
++
++  it("Playwright scaffold throws NOT_IMPLEMENTED", async () => {
++    await expect(
++      runPlaywrightVerify({
++        shopId: "x",
++        organizationId: "y",
++        mode: "PLAYWRIGHT",
++        verificationJobId: "z",
++      })
++    ).rejects.toMatchObject({ code: "NOT_IMPLEMENTED" });
++  });
++
++  it("HTTP POST /shops/:id/verify enqueues verify", async () => {
++    const shop = await connectShop({ organizationId: orgId, region: "UK" });
++    createdShopIds.push(shop.id);
++
++    const accessToken = await signAccessToken({
++      sub: ownerId,
++      orgId,
++      role: "OWNER",
++    });
++
++    const res = await request(app)
++      .post(`/api/v1/shops/${shop.id}/verify`)
++      .set("Authorization", `Bearer ${accessToken}`)
++      .send();
++
++    expect(res.status).toBe(200);
++    expect(res.body.verificationJobId).toBeTruthy();
++    // Test env skips enqueue; shop stays PENDING_INVITE until worker/processor runs.
++    expect(res.body.status).toBe("PENDING_INVITE");
++    const updated = await prisma.shop.findUniqueOrThrow({
++      where: { id: shop.id },
++    });
++    expect(updated.status).toBe("PENDING_INVITE");
++  }, 60000);
++});
+diff --git a/tests/smoke/foundation.http.test.ts b/tests/smoke/foundation.http.test.ts
+new file mode 100644
+index 0000000..67a671f
+--- /dev/null
++++ b/tests/smoke/foundation.http.test.ts
+@@ -0,0 +1,21 @@
++import { describe, it, expect } from "vitest";
++
++/**
++ * Gated live smoke against a running API.
++ * Skip unless SMOKE_HTTP=1 (requires Postgres + API on SMOKE_BASE_URL).
++ */
++const enabled = process.env.SMOKE_HTTP === "1";
++
++describe.skipIf(!enabled)("foundation HTTP smoke (gated)", () => {
++  const base = process.env.SMOKE_BASE_URL ?? "http://localhost:4000";
++
++  it(
++    "health is ok",
++    async () => {
++      const res = await fetch(`${base}/health`);
++      expect(res.status).toBe(200);
++      await expect(res.json()).resolves.toEqual({ ok: true });
++    },
++    15_000
++  );
++});
+diff --git a/tsconfig.json b/tsconfig.json
+new file mode 100644
+index 0000000..b7374c7
+--- /dev/null
++++ b/tsconfig.json
+@@ -0,0 +1,14 @@
++{
++  "compilerOptions": {
++    "target": "ES2022",
++    "module": "NodeNext",
++    "moduleResolution": "NodeNext",
++    "outDir": "dist",
++    "rootDir": "src",
++    "strict": true,
++    "esModuleInterop": true,
++    "skipLibCheck": true,
++    "resolveJsonModule": true
++  },
++  "include": ["src"]
++}
+diff --git a/vitest.config.ts b/vitest.config.ts
+new file mode 100644
+index 0000000..a526308
+--- /dev/null
++++ b/vitest.config.ts
+@@ -0,0 +1,12 @@
++import { defineConfig } from "vitest/config";
++
++export default defineConfig({
++  test: {
++    environment: "node",
++    include: ["tests/**/*.test.ts"],
++    setupFiles: ["tests/setup.ts"],
++    testTimeout: 30000,
++    // Shop tests share a small seeded bot pool; parallel files race on reserveBot.
++    fileParallelism: false,
++  },
++});

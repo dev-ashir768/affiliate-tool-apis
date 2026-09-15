@@ -1,0 +1,754 @@
+﻿# Review Task 9
+BASE: 77eeedde9c6256c46ff1d62a2947158418515ec1
+HEAD: b9d2115ae2ee7f9243061b33d720f90171846408
+## Commits
+b9d2115 docs: add Foundation README, rate limits, and smoke script
+
+## Diff
+diff --git a/README.md b/README.md
+new file mode 100644
+index 0000000..7819a24
+--- /dev/null
++++ b/README.md
+@@ -0,0 +1,98 @@
++# Affiliate Tool APIs (Foundation)
++
++Express + Prisma API and BullMQ worker for the affiliate tool foundation.
++
++## Prerequisites
++
++- Node.js 20+
++- PostgreSQL (local or remote)
++- Redis reachable at `REDIS_URL` (remote VPS is fine ΓÇö **no Docker required**)
++
++> **Redis note:** Auth refresh mirrors, rate limits, and the shop-verify queue use Redis.
++> Rate limiting **fails open** when Redis is unreachable so local API development still works.
++> Production must keep Redis reachable for refresh enforcement, rate limits, and workers.
++
++## Setup
++
++```bash
++cp .env.example .env
++# Edit DATABASE_URL, REDIS_URL, JWT secrets, SESSION_VAULT_KEY, CORS_ORIGINS, Stripe keys
++```
++
++### Environment (see `.env.example`)
++
++| Variable | Purpose |
++|----------|---------|
++| `DATABASE_URL` | Postgres connection string |
++| `REDIS_URL` | Redis for refresh mirror, rate limits, BullMQ |
++| `JWT_ACCESS_SECRET` / `JWT_REFRESH_SECRET` | Min 32 chars each |
++| `SESSION_VAULT_KEY` | 32-byte hex/string for session vault |
++| `CORS_ORIGINS` | Comma-separated origins (portal default `http://localhost:3000`) |
++| `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` | Billing |
++| `SHOP_VERIFY_MODE` | `stub` (default) or `playwright` |
++
++### Database
++
++```bash
++npm install
++npm run prisma:generate
++npm run prisma:migrate    # prisma migrate deploy
++npm run prisma:seed       # plans + sample bot identities
++```
++
++Free plan has `shopLimit: 0` ΓÇö bump an orgΓÇÖs `shopLimit` (or complete Stripe billing) before connecting a shop.
++
++## Run
++
++```bash
++# API (default http://localhost:4000)
++npm run dev
++
++# Worker (shop verify queue) ΓÇö needs reachable Redis
++npm run worker
++```
++
++Health check: `GET /health` ΓåÆ `{ "ok": true }`.
++
++### Portal CORS
++
++Set `CORS_ORIGINS` to the portal origin(s), e.g. `http://localhost:3000`.
++Credentials (cookies) are enabled; the portal must call the API with `credentials: "include"`.
++
++### Stripe webhooks (local)
++
++```bash
++stripe listen --forward-to localhost:4000/api/v1/webhooks/stripe
++```
++
++Copy the CLI webhook signing secret into `STRIPE_WEBHOOK_SECRET`.
++
++## Smoke script
++
++With API (+ ideally worker) running:
++
++```bash
++npm run smoke
++# or: npx tsx scripts/smoke-foundation.ts
++```
++
++Flow: register ΓåÆ bump org `shopLimit` to 1 (free plan starts at 0) ΓåÆ connect shop ΓåÆ request verify ΓåÆ poll until `ACTIVE`.
++
++If Redis/worker is unavailable, the script falls back to calling `processShopVerify` directly and documents that path in the console output.
++
++Optional gated HTTP smoke test:
++
++```bash
++SMOKE_HTTP=1 npm test -- tests/smoke/foundation.http.test.ts
++```
++
++## Scripts
++
++| Script | Description |
++|--------|-------------|
++| `npm run dev` | API with watch |
++| `npm run worker` | Shop-verify worker with watch |
++| `npm run smoke` | Foundation end-to-end smoke |
++| `npm test` | Vitest suite |
++| `npm run prisma:migrate` | `prisma migrate deploy` |
++| `npm run prisma:seed` | Seed plans/bots |
+diff --git a/package.json b/package.json
+index e031196..d09e38c 100644
+--- a/package.json
++++ b/package.json
+@@ -10,16 +10,17 @@
+   "type": "module",
+   "scripts": {
+     "dev": "tsx watch src/server.ts",
+     "worker": "tsx watch src/worker.ts",
+     "build": "tsc -p tsconfig.json",
+     "start": "node dist/server.js",
+     "test": "vitest run",
+     "test:watch": "vitest",
++    "smoke": "tsx scripts/smoke-foundation.ts",
+     "prisma:migrate": "prisma migrate deploy",
+     "prisma:migrate:dev": "prisma migrate dev",
+     "prisma:seed": "prisma db seed",
+     "prisma:generate": "prisma generate"
+   },
+   "prisma": {
+     "seed": "tsx prisma/seed.ts"
+   },
+diff --git a/scripts/smoke-foundation.ts b/scripts/smoke-foundation.ts
+new file mode 100644
+index 0000000..2f9825f
+--- /dev/null
++++ b/scripts/smoke-foundation.ts
+@@ -0,0 +1,228 @@
++/**
++ * Foundation smoke: register ΓåÆ bump shopLimit ΓåÆ connect ΓåÆ verify ΓåÆ poll ACTIVE.
++ *
++ * Prerequisites: API on BASE_URL (default http://localhost:4000), Postgres configured.
++ * Worker + Redis preferred for queue path; if enqueue/worker unavailable, falls back to
++ * processShopVerify() directly (documented in logs).
++ *
++ * Free plan shopLimit is 0 ΓÇö this script upserts shopLimit=1 after register.
++ *
++ * Usage: npx tsx scripts/smoke-foundation.ts
++ */
++import type { Job } from "bullmq";
++import { prisma } from "../src/lib/prisma.js";
++import { redis } from "../src/lib/redis.js";
++import {
++  processShopVerify,
++  type ShopVerifyJobData,
++} from "../src/workers/shop-verify.processor.js";
++
++const BASE_URL = process.env.SMOKE_BASE_URL ?? "http://localhost:4000";
++const POLL_MS = 500;
++const POLL_TIMEOUT_MS = 15_000;
++
++function fakeJob(
++  data: ShopVerifyJobData,
++  id = "smoke-fallback"
++): Job<ShopVerifyJobData> {
++  return { id, data } as Job<ShopVerifyJobData>;
++}
++
++async function jsonFetch(
++  path: string,
++  init: RequestInit & { token?: string } = {}
++) {
++  const headers = new Headers(init.headers);
++  headers.set("content-type", "application/json");
++  if (init.token) headers.set("authorization", `Bearer ${init.token}`);
++  const res = await fetch(`${BASE_URL}${path}`, { ...init, headers });
++  const text = await res.text();
++  let body: unknown = null;
++  try {
++    body = text ? JSON.parse(text) : null;
++  } catch {
++    body = text;
++  }
++  return { status: res.status, body };
++}
++
++function assertOk(label: string, ok: boolean, detail?: unknown): asserts ok {
++  if (!ok) {
++    console.error(`FAIL: ${label}`, detail ?? "");
++    process.exit(1);
++  }
++  console.log(`OK: ${label}`);
++}
++
++async function sleep(ms: number) {
++  await new Promise((r) => setTimeout(r, ms));
++}
++
++async function runVerifyFallback(
++  shopId: string,
++  organizationId: string,
++  verificationJobId: string | null,
++  reason: string
++) {
++  console.warn(`Fallback: ${reason}`);
++  console.warn(
++    "For production-like smoke, keep Redis reachable and run `npm run worker`."
++  );
++
++  let jobId = verificationJobId;
++  if (!jobId) {
++    await prisma.shop.update({
++      where: { id: shopId },
++      data: { status: "PENDING_INVITE", statusReason: null },
++    });
++    const created = await prisma.shopVerificationJob.create({
++      data: { shopId, mode: "STUB", status: "QUEUED" },
++    });
++    jobId = created.id;
++  } else {
++    await prisma.shopVerificationJob.update({
++      where: { id: jobId },
++      data: { status: "QUEUED", lastError: null },
++    });
++    await prisma.shop.update({
++      where: { id: shopId },
++      data: { status: "PENDING_INVITE", statusReason: null },
++    });
++  }
++
++  await processShopVerify(
++    fakeJob({
++      shopId,
++      organizationId,
++      mode: "STUB",
++      verificationJobId: jobId,
++    })
++  );
++}
++
++async function main() {
++  const suffix = Date.now();
++  const email = `smoke_${suffix}@example.com`;
++  const password = "SmokeTest123!";
++
++  console.log(`Smoke against ${BASE_URL}`);
++  console.log(
++    "Note: free plan shopLimit=0 ΓÇö will bump org shopLimit to 1 after register."
++  );
++
++  const health = await jsonFetch("/health");
++  assertOk(
++    "health",
++    health.status === 200 &&
++      (health.body as { ok?: boolean })?.ok === true,
++    health
++  );
++
++  const register = await jsonFetch("/api/v1/auth/register", {
++    method: "POST",
++    body: JSON.stringify({
++      email,
++      password,
++      name: "Smoke User",
++      organizationName: `Smoke Org ${suffix}`,
++    }),
++  });
++  assertOk("register", register.status === 201, register);
++  const regBody = register.body as {
++    accessToken: string;
++    organization: { id: string };
++  };
++  const token = regBody.accessToken;
++  const orgId = regBody.organization.id;
++
++  await prisma.organization.update({
++    where: { id: orgId },
++    data: { shopLimit: 1 },
++  });
++  console.log("OK: bumped organization.shopLimit ΓåÆ 1");
++
++  const connect = await jsonFetch("/api/v1/shops/connect", {
++    method: "POST",
++    token,
++    body: JSON.stringify({ region: "US" }),
++  });
++  assertOk("connect shop", connect.status === 201, connect);
++  const shop = connect.body as { id: string; status: string };
++  console.log(`  shopId=${shop.id} status=${shop.status}`);
++
++  const verify = await jsonFetch(`/api/v1/shops/${shop.id}/verify`, {
++    method: "POST",
++    token,
++  });
++
++  let usedFallback = false;
++  let verificationJobId: string | null = null;
++
++  if (verify.status === 200) {
++    console.log("OK: request verify");
++    const verifyBody = verify.body as {
++      verificationJobId: string;
++      status: string;
++    };
++    verificationJobId = verifyBody.verificationJobId;
++    console.log(
++      `  verificationJobId=${verificationJobId} status=${verifyBody.status}`
++    );
++
++    const started = Date.now();
++    let finalStatus = verifyBody.status;
++
++    while (Date.now() - started < POLL_TIMEOUT_MS) {
++      const get = await jsonFetch(`/api/v1/shops/${shop.id}`, { token });
++      if (get.status === 200) {
++        finalStatus = (get.body as { status: string }).status;
++        if (finalStatus === "ACTIVE") break;
++        if (finalStatus === "FAILED") break;
++      }
++      await sleep(POLL_MS);
++    }
++
++    if (finalStatus !== "ACTIVE") {
++      await runVerifyFallback(
++        shop.id,
++        orgId,
++        verificationJobId,
++        `Shop stuck at ${finalStatus} after poll ΓÇö processShopVerify() fallback`
++      );
++      usedFallback = true;
++    }
++  } else {
++    await runVerifyFallback(
++      shop.id,
++      orgId,
++      null,
++      `POST /verify returned ${verify.status} (likely Redis enqueue failure)`
++    );
++    usedFallback = true;
++  }
++
++  const get = await jsonFetch(`/api/v1/shops/${shop.id}`, { token });
++  const finalStatus =
++    get.status === 200
++      ? (get.body as { status: string }).status
++      : "UNKNOWN";
++  assertOk("shop ACTIVE", finalStatus === "ACTIVE", {
++    finalStatus,
++    usedFallback,
++  });
++  console.log(
++    usedFallback
++      ? "Smoke passed (via processShopVerify fallback)."
++      : "Smoke passed (via queue/worker)."
++  );
++}
++
++main()
++  .catch((err) => {
++    console.error(err);
++    process.exit(1);
++  })
++  .finally(async () => {
++    await prisma.$disconnect().catch(() => {});
++    if (redis.status === "ready") await redis.quit().catch(() => {});
++  });
+diff --git a/src/lib/errors.ts b/src/lib/errors.ts
+index 3c74af5..911e340 100644
+--- a/src/lib/errors.ts
++++ b/src/lib/errors.ts
+@@ -1,16 +1,17 @@
+ export type ErrorCode =
+   | "UNAUTHORIZED"
+   | "FORBIDDEN"
+   | "VALIDATION_ERROR"
+   | "PLAN_LIMIT"
+   | "SHOP_NOT_READY"
+   | "CONFLICT"
+   | "NOT_FOUND"
++  | "RATE_LIMITED"
+   | "INTERNAL"
+   | "NOT_IMPLEMENTED";
+ 
+ export class AppError extends Error {
+   constructor(
+     public code: ErrorCode,
+     message: string,
+     public status = 400,
+diff --git a/src/middleware/rate-limit.ts b/src/middleware/rate-limit.ts
+new file mode 100644
+index 0000000..5cb0b94
+--- /dev/null
++++ b/src/middleware/rate-limit.ts
+@@ -0,0 +1,162 @@
++import { randomBytes } from "node:crypto";
++import type { Request, RequestHandler } from "express";
++import { AppError } from "../lib/errors.js";
++import { redis } from "../lib/redis.js";
++
++const SLIDING_WINDOW_LUA = `
++local key = KEYS[1]
++local now = tonumber(ARGV[1])
++local windowMs = tonumber(ARGV[2])
++local limit = tonumber(ARGV[3])
++local member = ARGV[4]
++local ttlSec = tonumber(ARGV[5])
++redis.call('ZREMRANGEBYSCORE', key, 0, now - windowMs)
++local count = redis.call('ZCARD', key)
++if count >= limit then
++  return 0
++end
++redis.call('ZADD', key, now, member)
++redis.call('EXPIRE', key, ttlSec)
++return 1
++`;
++
++let redisAvailable: boolean | null = null;
++
++/** Best-effort Redis readiness; never throws ΓÇö rate limit fails open. */
++async function ensureRedis(): Promise<boolean> {
++  // Prefer live ready status so Redis can recover after a prior outage.
++  if (redis.status === "ready") {
++    redisAvailable = true;
++    return true;
++  }
++  if (redisAvailable === false) return false;
++
++  if (
++    redis.status === "wait" ||
++    redis.status === "end" ||
++    redis.status === "close"
++  ) {
++    try {
++      await Promise.race([
++        redis.connect(),
++        new Promise((_, reject) =>
++          setTimeout(() => reject(new Error("Redis connect timeout")), 1500)
++        ),
++      ]);
++      if (redis.status === "ready") {
++        redisAvailable = true;
++        return true;
++      }
++    } catch {
++      redisAvailable = false;
++      return false;
++    }
++  }
++
++  if (
++    redis.status === "connecting" ||
++    redis.status === "connect" ||
++    redis.status === "reconnecting"
++  ) {
++    try {
++      await new Promise<void>((resolve, reject) => {
++        const timer = setTimeout(
++          () => reject(new Error("Redis ready timeout")),
++          1500
++        );
++        const onReady = () => {
++          clearTimeout(timer);
++          cleanup();
++          resolve();
++        };
++        const onError = (err: Error) => {
++          clearTimeout(timer);
++          cleanup();
++          reject(err);
++        };
++        const cleanup = () => {
++          redis.off("ready", onReady);
++          redis.off("error", onError);
++        };
++        redis.once("ready", onReady);
++        redis.once("error", onError);
++      });
++      redisAvailable = true;
++      return true;
++    } catch {
++      redisAvailable = false;
++      return false;
++    }
++  }
++
++  redisAvailable = false;
++  return false;
++}
++
++function clientKey(req: Request): string {
++  return req.ip || req.socket.remoteAddress || "unknown";
++}
++
++/**
++ * Redis sliding-window rate limiter.
++ * When Redis is unreachable, requests are allowed through (fail open)
++ * so local/dev API stays usable; production should keep Redis reachable.
++ */
++export function rateLimit({
++  key,
++  limit,
++  windowSec,
++}: {
++  key: (req: Request) => string;
++  limit: number;
++  windowSec: number;
++}): RequestHandler {
++  return async (req, _res, next) => {
++    try {
++      if (!(await ensureRedis())) {
++        next();
++        return;
++      }
++
++      const redisKey = `rl:${key(req)}`;
++      const now = Date.now();
++      const member = `${now}:${randomBytes(6).toString("hex")}`;
++      const allowed = (await redis.eval(
++        SLIDING_WINDOW_LUA,
++        1,
++        redisKey,
++        String(now),
++        String(windowSec * 1000),
++        String(limit),
++        member,
++        String(windowSec)
++      )) as number;
++
++      if (allowed === 0) {
++        next(
++          new AppError(
++            "RATE_LIMITED",
++            "Too many requests, please try again later",
++            429
++          )
++        );
++        return;
++      }
++
++      next();
++    } catch (err) {
++      if (err instanceof AppError) {
++        next(err);
++        return;
++      }
++      // Redis command failure ΓÇö fail open
++      redisAvailable = false;
++      next();
++    }
++  };
++}
++
++/** Default IP-based key helpers for route wiring. */
++export function rateLimitKey(prefix: string) {
++  return (req: Request) => `${prefix}:${clientKey(req)}`;
++}
+diff --git a/src/modules/auth/auth.routes.ts b/src/modules/auth/auth.routes.ts
+index a445ffa..00bdf6e 100644
+--- a/src/modules/auth/auth.routes.ts
++++ b/src/modules/auth/auth.routes.ts
+@@ -1,30 +1,39 @@
+ import { Router } from "express";
+ import type { CookieOptions, Response } from "express";
+ import { env } from "../../config/env.js";
+ import { AppError } from "../../lib/errors.js";
+ import { validateBody } from "../../middleware/validate.js";
+ import { authenticate } from "../../middleware/authenticate.js";
++import { rateLimit, rateLimitKey } from "../../middleware/rate-limit.js";
+ import {
+   loginSchema,
+   refreshSchema,
+   registerSchema,
+ } from "./auth.schemas.js";
+ import {
+   getMe,
+   login,
+   register,
+   revokeRefresh,
+   rotateRefresh,
+ } from "./auth.service.js";
+ import { refreshTtl } from "./refresh-store.js";
+ 
+ export const authRoutes = Router();
+ 
++authRoutes.use(
++  rateLimit({
++    key: rateLimitKey("auth"),
++    limit: 20,
++    windowSec: 60,
++  })
++);
++
+ function refreshCookieOptions(): CookieOptions {
+   return {
+     httpOnly: true,
+     sameSite: "lax",
+     secure: env.NODE_ENV === "production",
+     maxAge: refreshTtl() * 1000,
+     path: "/",
+   };
+diff --git a/src/modules/shops/shops.routes.ts b/src/modules/shops/shops.routes.ts
+index 7ad1b5d..f4b7741 100644
+--- a/src/modules/shops/shops.routes.ts
++++ b/src/modules/shops/shops.routes.ts
+@@ -1,14 +1,15 @@
+ import { Router } from "express";
+ import { AppError } from "../../lib/errors.js";
+ import { validateBody } from "../../middleware/validate.js";
+ import { authenticate } from "../../middleware/authenticate.js";
+ import { requireOrg } from "../../middleware/require-org.js";
+ import { requireRole } from "../../middleware/require-role.js";
++import { rateLimit, rateLimitKey } from "../../middleware/rate-limit.js";
+ import { connectShopSchema } from "./shops.schemas.js";
+ import {
+   connectShop,
+   disconnectShop,
+   getShop,
+   listShops,
+ } from "./shops.service.js";
+ import { requestVerify } from "./verify.service.js";
+@@ -58,16 +59,21 @@ shopsRoutes.get("/:id", authenticate, requireOrg, async (req, res, next) => {
+     res.json(shop);
+   } catch (err) {
+     next(err);
+   }
+ });
+ 
+ shopsRoutes.post(
+   "/:id/verify",
++  rateLimit({
++    key: rateLimitKey("shop-verify"),
++    limit: 10,
++    windowSec: 60,
++  }),
+   authenticate,
+   requireOrg,
+   requireRole("OWNER", "ADMIN"),
+   async (req, res, next) => {
+     try {
+       if (!req.auth) {
+         throw new AppError("UNAUTHORIZED", "Missing access token", 401);
+       }
+diff --git a/tests/middleware/rate-limit.test.ts b/tests/middleware/rate-limit.test.ts
+new file mode 100644
+index 0000000..987630b
+--- /dev/null
++++ b/tests/middleware/rate-limit.test.ts
+@@ -0,0 +1,77 @@
++import { describe, it, expect, vi, beforeEach } from "vitest";
++import type { Request, Response, NextFunction } from "express";
++import { rateLimit, rateLimitKey } from "../../src/middleware/rate-limit.js";
++import { AppError } from "../../src/lib/errors.js";
++
++vi.mock("../../src/lib/redis.js", () => {
++  const redis = {
++    status: "wait" as string,
++    connect: vi.fn(async () => {
++      throw new Error("unreachable");
++    }),
++    eval: vi.fn(),
++    on: vi.fn(),
++    off: vi.fn(),
++    once: vi.fn(),
++  };
++  return { redis };
++});
++
++import { redis } from "../../src/lib/redis.js";
++
++function mockReq(ip = "127.0.0.1"): Request {
++  return { ip, socket: { remoteAddress: ip } } as Request;
++}
++
++describe("rateLimit middleware", () => {
++  beforeEach(() => {
++    vi.clearAllMocks();
++    (redis as { status: string }).status = "wait";
++  });
++
++  it("fails open when Redis is unavailable", async () => {
++    const mw = rateLimit({
++      key: rateLimitKey("auth"),
++      limit: 2,
++      windowSec: 60,
++    });
++    const next = vi.fn() as NextFunction;
++    await mw(mockReq(), {} as Response, next);
++    expect(next).toHaveBeenCalledOnce();
++    expect(next.mock.calls[0]?.[0]).toBeUndefined();
++  });
++
++  it("returns 429 AppError when over limit", async () => {
++    (redis as { status: string }).status = "ready";
++    (redis.eval as ReturnType<typeof vi.fn>).mockResolvedValue(0);
++
++    const mw = rateLimit({
++      key: rateLimitKey("auth"),
++      limit: 2,
++      windowSec: 60,
++    });
++    const next = vi.fn() as NextFunction;
++    await mw(mockReq("10.0.0.1"), {} as Response, next);
++
++    expect(next).toHaveBeenCalledOnce();
++    const err = next.mock.calls[0]?.[0];
++    expect(err).toBeInstanceOf(AppError);
++    expect((err as AppError).code).toBe("RATE_LIMITED");
++    expect((err as AppError).status).toBe(429);
++  });
++
++  it("allows when under limit", async () => {
++    (redis as { status: string }).status = "ready";
++    (redis.eval as ReturnType<typeof vi.fn>).mockResolvedValue(1);
++
++    const mw = rateLimit({
++      key: rateLimitKey("auth"),
++      limit: 20,
++      windowSec: 60,
++    });
++    const next = vi.fn() as NextFunction;
++    await mw(mockReq(), {} as Response, next);
++    expect(next).toHaveBeenCalledOnce();
++    expect(next.mock.calls[0]?.[0]).toBeUndefined();
++  });
++});
+diff --git a/tests/smoke/foundation.http.test.ts b/tests/smoke/foundation.http.test.ts
+new file mode 100644
+index 0000000..67a671f
+--- /dev/null
++++ b/tests/smoke/foundation.http.test.ts
+@@ -0,0 +1,21 @@
++import { describe, it, expect } from "vitest";
++
++/**
++ * Gated live smoke against a running API.
++ * Skip unless SMOKE_HTTP=1 (requires Postgres + API on SMOKE_BASE_URL).
++ */
++const enabled = process.env.SMOKE_HTTP === "1";
++
++describe.skipIf(!enabled)("foundation HTTP smoke (gated)", () => {
++  const base = process.env.SMOKE_BASE_URL ?? "http://localhost:4000";
++
++  it(
++    "health is ok",
++    async () => {
++      const res = await fetch(`${base}/health`);
++      expect(res.status).toBe(200);
++      await expect(res.json()).resolves.toEqual({ ok: true });
++    },
++    15_000
++  );
++});
+

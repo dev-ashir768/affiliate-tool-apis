@@ -1,0 +1,781 @@
+﻿# Review package Task 4
+BASE: 812c5405b3a49c246c46b852c82fb2e2e0d8e67c
+HEAD: f224536e8e04522eee275f044917baa8242ac9fc
+## Commits
+f224536 feat: implement JWT auth register, login, refresh, logout, me
+a405986 feat: implement JWT auth register, login, refresh, logout, me
+
+## Stat
+ .env.example                      |   2 +-
+ src/app.ts                        |   2 +
+ src/lib/redis.ts                  |   8 ++
+ src/middleware/authenticate.ts    |  32 +++++++
+ src/middleware/validate.ts        |  13 +++
+ src/modules/auth/auth.routes.ts   | 126 ++++++++++++++++++++++++++
+ src/modules/auth/auth.schemas.ts  |  17 ++++
+ src/modules/auth/auth.service.ts  | 184 ++++++++++++++++++++++++++++++++++++++
+ src/modules/auth/refresh-store.ts | 109 ++++++++++++++++++++++
+ tests/auth/auth.http.test.ts      |  66 ++++++++++++++
+ tests/auth/auth.service.test.ts   |  53 +++++++++++
+ tests/setup.ts                    |  18 +++-
+ vitest.config.ts                  |   1 +
+ 13 files changed, 626 insertions(+), 5 deletions(-)
+
+## Diff (excludes lockfile bulk if any)
+diff --git a/.env.example b/.env.example
+index 8a5ff04..ef3abd4 100644
+--- a/.env.example
++++ b/.env.example
+@@ -1,12 +1,12 @@
+ NODE_ENV=development
+ PORT=4000
+ DATABASE_URL=postgresql://user:password@localhost:5432/affiliate_tool
+-REDIS_URL=redis://127.0.0.1:6379
++REDIS_URL=redis://:password@your-vps-host:6379
+ JWT_ACCESS_SECRET=change-me-access-secret-min-32-chars
+ JWT_REFRESH_SECRET=change-me-refresh-secret-min-32-chars
+ SESSION_VAULT_KEY=0123456789abcdef0123456789abcdef
+ ACCESS_TOKEN_TTL_SEC=900
+ REFRESH_TOKEN_TTL_SEC=604800
+ CORS_ORIGINS=http://localhost:3000
+ STRIPE_SECRET_KEY=sk_test_xxx
+ STRIPE_WEBHOOK_SECRET=whsec_xxx
+diff --git a/src/app.ts b/src/app.ts
+index 46ac5c5..05cfa7b 100644
+--- a/src/app.ts
++++ b/src/app.ts
+@@ -1,23 +1,25 @@
+ import express from "express";
+ import cors from "cors";
+ import helmet from "helmet";
+ import cookieParser from "cookie-parser";
+ import { env } from "./config/env.js";
+ import { errorHandler } from "./middleware/error-handler.js";
++import { authRoutes } from "./modules/auth/auth.routes.js";
+ 
+ export function createApp() {
+   const app = express();
+   app.use(helmet());
+   app.use(
+     cors({
+       origin: env.CORS_ORIGINS.split(",").map((s) => s.trim()),
+       credentials: true,
+     })
+   );
+   app.use(cookieParser());
+   app.get("/health", (_req, res) => res.json({ ok: true }));
+   // JSON parser for non-webhook routes (billing webhook raw body added in Task 8)
+   app.use(express.json());
++  app.use("/api/v1/auth", authRoutes);
+   app.use(errorHandler);
+   return app;
+ }
+diff --git a/src/lib/redis.ts b/src/lib/redis.ts
+index 7811962..df227ef 100644
+--- a/src/lib/redis.ts
++++ b/src/lib/redis.ts
+@@ -1,7 +1,15 @@
+ import Redis from "ioredis";
+ import { env } from "../config/env.js";
+ 
+ export const redis = new Redis(env.REDIS_URL, {
+   maxRetriesPerRequest: null,
+   lazyConnect: true,
++  enableOfflineQueue: false,
++  retryStrategy(times) {
++    if (env.NODE_ENV === "test") return null;
++    return Math.min(times * 50, 2000);
++  },
+ });
++
++// Prevent unhandled 'error' spam when Redis is down (e.g. local tests)
++redis.on("error", () => {});
+diff --git a/src/middleware/authenticate.ts b/src/middleware/authenticate.ts
+new file mode 100644
+index 0000000..a10198d
+--- /dev/null
++++ b/src/middleware/authenticate.ts
+@@ -0,0 +1,32 @@
++import type { RequestHandler } from "express";
++import { AppError } from "../lib/errors.js";
++import { verifyAccessToken, type AccessClaims } from "../lib/tokens.js";
++
++declare global {
++  namespace Express {
++    interface Request {
++      auth?: AccessClaims;
++    }
++  }
++}
++
++export const authenticate: RequestHandler = async (req, _res, next) => {
++  try {
++    const header = req.headers.authorization;
++    if (!header?.startsWith("Bearer ")) {
++      throw new AppError("UNAUTHORIZED", "Missing access token", 401);
++    }
++    const token = header.slice("Bearer ".length).trim();
++    if (!token) {
++      throw new AppError("UNAUTHORIZED", "Missing access token", 401);
++    }
++    req.auth = await verifyAccessToken(token);
++    next();
++  } catch (err) {
++    if (err instanceof AppError) {
++      next(err);
++      return;
++    }
++    next(new AppError("UNAUTHORIZED", "Invalid access token", 401));
++  }
++};
+diff --git a/src/middleware/validate.ts b/src/middleware/validate.ts
+new file mode 100644
+index 0000000..2698aa7
+--- /dev/null
++++ b/src/middleware/validate.ts
+@@ -0,0 +1,13 @@
++import type { RequestHandler } from "express";
++import type { ZodTypeAny } from "zod";
++
++export function validateBody(schema: ZodTypeAny): RequestHandler {
++  return (req, _res, next) => {
++    try {
++      req.body = schema.parse(req.body ?? {});
++      next();
++    } catch (err) {
++      next(err);
++    }
++  };
++}
+diff --git a/src/modules/auth/auth.routes.ts b/src/modules/auth/auth.routes.ts
+new file mode 100644
+index 0000000..f2bc32a
+--- /dev/null
++++ b/src/modules/auth/auth.routes.ts
+@@ -0,0 +1,126 @@
++import { Router } from "express";
++import type { CookieOptions, Response } from "express";
++import { env } from "../../config/env.js";
++import { AppError } from "../../lib/errors.js";
++import { validateBody } from "../../middleware/validate.js";
++import { authenticate } from "../../middleware/authenticate.js";
++import {
++  loginSchema,
++  refreshSchema,
++  registerSchema,
++} from "./auth.schemas.js";
++import {
++  getMe,
++  login,
++  register,
++  revokeRefresh,
++  rotateRefresh,
++} from "./auth.service.js";
++import { refreshTtl } from "./refresh-store.js";
++
++export const authRoutes = Router();
++
++function refreshCookieOptions(): CookieOptions {
++  return {
++    httpOnly: true,
++    sameSite: "lax",
++    secure: env.NODE_ENV === "production",
++    maxAge: refreshTtl() * 1000,
++    path: "/",
++  };
++}
++
++function setRefreshCookie(res: Response, refreshToken: string) {
++  res.cookie("refresh_token", refreshToken, refreshCookieOptions());
++}
++
++function clearRefreshCookie(res: Response) {
++  res.clearCookie("refresh_token", {
++    httpOnly: true,
++    sameSite: "lax",
++    secure: env.NODE_ENV === "production",
++    path: "/",
++  });
++}
++
++function rawRefreshFromRequest(req: {
++  body?: { refreshToken?: string };
++  cookies?: Record<string, string>;
++}): string {
++  const fromBody = req.body?.refreshToken;
++  const fromCookie = req.cookies?.refresh_token;
++  const raw = fromBody || fromCookie;
++  if (!raw) {
++    throw new AppError("UNAUTHORIZED", "Missing refresh token", 401);
++  }
++  return raw;
++}
++
++authRoutes.post("/register", validateBody(registerSchema), async (req, res, next) => {
++  try {
++    const result = await register(req.body);
++    setRefreshCookie(res, result.refreshToken);
++    res.status(201).json({
++      user: result.user,
++      organization: result.organization,
++      accessToken: result.accessToken,
++      refreshToken: result.refreshToken,
++    });
++  } catch (err) {
++    next(err);
++  }
++});
++
++authRoutes.post("/login", validateBody(loginSchema), async (req, res, next) => {
++  try {
++    const result = await login(req.body);
++    setRefreshCookie(res, result.refreshToken);
++    res.json({
++      user: result.user,
++      organizationId: result.organizationId,
++      accessToken: result.accessToken,
++      refreshToken: result.refreshToken,
++    });
++  } catch (err) {
++    next(err);
++  }
++});
++
++authRoutes.post("/refresh", validateBody(refreshSchema), async (req, res, next) => {
++  try {
++    const raw = rawRefreshFromRequest(req);
++    const result = await rotateRefresh(raw);
++    setRefreshCookie(res, result.refreshToken);
++    res.json({
++      accessToken: result.accessToken,
++      refreshToken: result.refreshToken,
++    });
++  } catch (err) {
++    next(err);
++  }
++});
++
++authRoutes.post("/logout", validateBody(refreshSchema), async (req, res, next) => {
++  try {
++    const raw = req.body?.refreshToken || req.cookies?.refresh_token;
++    if (raw) {
++      await revokeRefresh(raw);
++    }
++    clearRefreshCookie(res);
++    res.status(204).send();
++  } catch (err) {
++    next(err);
++  }
++});
++
++authRoutes.get("/me", authenticate, async (req, res, next) => {
++  try {
++    if (!req.auth) {
++      throw new AppError("UNAUTHORIZED", "Missing access token", 401);
++    }
++    const me = await getMe(req.auth.sub, req.auth.orgId);
++    res.json(me);
++  } catch (err) {
++    next(err);
++  }
++});
+diff --git a/src/modules/auth/auth.schemas.ts b/src/modules/auth/auth.schemas.ts
+new file mode 100644
+index 0000000..02303d9
+--- /dev/null
++++ b/src/modules/auth/auth.schemas.ts
+@@ -0,0 +1,17 @@
++import { z } from "zod";
++
++export const registerSchema = z.object({
++  email: z.string().email(),
++  password: z.string().min(8),
++  name: z.string().min(1),
++  organizationName: z.string().min(1),
++});
++
++export const loginSchema = z.object({
++  email: z.string().email(),
++  password: z.string().min(1),
++});
++
++export const refreshSchema = z.object({
++  refreshToken: z.string().min(1).optional(),
++});
+diff --git a/src/modules/auth/auth.service.ts b/src/modules/auth/auth.service.ts
+new file mode 100644
+index 0000000..d26eb68
+--- /dev/null
++++ b/src/modules/auth/auth.service.ts
+@@ -0,0 +1,184 @@
++import { prisma } from "../../lib/prisma.js";
++import { AppError } from "../../lib/errors.js";
++import { hashPassword, verifyPassword } from "../../lib/password.js";
++import {
++  generateRefreshToken,
++  signAccessToken,
++  type AccessClaims,
++} from "../../lib/tokens.js";
++import { sha256 } from "../../lib/crypto.js";
++import {
++  mirrorRefresh,
++  revokeRefreshMirror,
++  isRefreshMirrored,
++  refreshTtl,
++} from "./refresh-store.js";
++
++function slugify(name: string) {
++  return (
++    name
++      .toLowerCase()
++      .replace(/[^a-z0-9]+/g, "-")
++      .replace(/(^-|-$)/g, "")
++      .slice(0, 40) +
++    "-" +
++    Math.random().toString(36).slice(2, 8)
++  );
++}
++
++async function issueSession(claims: AccessClaims) {
++  const accessToken = await signAccessToken(claims);
++  const { raw, hash } = generateRefreshToken();
++  const expiresAt = new Date(Date.now() + refreshTtl() * 1000);
++  await prisma.refreshToken.create({
++    data: { userId: claims.sub, tokenHash: hash, expiresAt },
++  });
++  await mirrorRefresh(hash, refreshTtl());
++  return { accessToken, refreshToken: raw };
++}
++
++export async function register(input: {
++  email: string;
++  password: string;
++  name: string;
++  organizationName: string;
++}) {
++  const email = input.email.toLowerCase().trim();
++  const existing = await prisma.user.findUnique({ where: { email } });
++  if (existing) throw new AppError("CONFLICT", "Email already registered", 409);
++
++  const free = await prisma.plan.findUnique({ where: { code: "free" } });
++  if (!free) throw new AppError("INTERNAL", "Free plan missing", 500);
++
++  const passwordHash = await hashPassword(input.password);
++
++  const result = await prisma.$transaction(async (tx) => {
++    const user = await tx.user.create({
++      data: { email, passwordHash, name: input.name },
++    });
++    const organization = await tx.organization.create({
++      data: {
++        name: input.organizationName,
++        slug: slugify(input.organizationName),
++        planId: free.id,
++        seatLimit: free.seatLimit,
++        shopLimit: free.shopLimit,
++        dailyInviteQuota: free.dailyInviteQuota,
++      },
++    });
++    await tx.membership.create({
++      data: {
++        userId: user.id,
++        organizationId: organization.id,
++        role: "OWNER",
++        status: "ACTIVE",
++      },
++    });
++    return { user, organization };
++  });
++
++  const session = await issueSession({
++    sub: result.user.id,
++    orgId: result.organization.id,
++    role: "OWNER",
++  });
++
++  return {
++    user: { id: result.user.id, email: result.user.email, name: result.user.name },
++    organization: {
++      id: result.organization.id,
++      name: result.organization.name,
++      slug: result.organization.slug,
++    },
++    ...session,
++  };
++}
++
++export async function login(input: { email: string; password: string }) {
++  const email = input.email.toLowerCase().trim();
++  const user = await prisma.user.findUnique({ where: { email } });
++  if (!user || !(await verifyPassword(user.passwordHash, input.password))) {
++    throw new AppError("UNAUTHORIZED", "Invalid credentials", 401);
++  }
++  const membership = await prisma.membership.findFirst({
++    where: { userId: user.id, status: "ACTIVE" },
++    orderBy: { createdAt: "asc" },
++  });
++  if (!membership) throw new AppError("FORBIDDEN", "No active organization", 403);
++
++  const session = await issueSession({
++    sub: user.id,
++    orgId: membership.organizationId,
++    role: membership.role,
++  });
++  return {
++    user: { id: user.id, email: user.email, name: user.name },
++    organizationId: membership.organizationId,
++    ...session,
++  };
++}
++
++export async function rotateRefresh(raw: string) {
++  const hash = sha256(raw);
++  if (!(await isRefreshMirrored(hash))) {
++    throw new AppError("UNAUTHORIZED", "Invalid refresh token", 401);
++  }
++  const stored = await prisma.refreshToken.findUnique({ where: { tokenHash: hash } });
++  if (!stored || stored.revokedAt || stored.expiresAt < new Date()) {
++    throw new AppError("UNAUTHORIZED", "Invalid refresh token", 401);
++  }
++
++  const membership = await prisma.membership.findFirst({
++    where: { userId: stored.userId, status: "ACTIVE" },
++    orderBy: { createdAt: "asc" },
++  });
++  if (!membership) throw new AppError("FORBIDDEN", "No active organization", 403);
++
++  await prisma.refreshToken.update({
++    where: { id: stored.id },
++    data: { revokedAt: new Date() },
++  });
++  await revokeRefreshMirror(hash);
++
++  return issueSession({
++    sub: stored.userId,
++    orgId: membership.organizationId,
++    role: membership.role,
++  });
++}
++
++export async function revokeRefresh(raw: string) {
++  const hash = sha256(raw);
++  const stored = await prisma.refreshToken.findUnique({ where: { tokenHash: hash } });
++  if (stored && !stored.revokedAt) {
++    await prisma.refreshToken.update({
++      where: { id: stored.id },
++      data: { revokedAt: new Date() },
++    });
++  }
++  await revokeRefreshMirror(hash);
++}
++
++export async function getMe(userId: string, orgId: string) {
++  const user = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
++  const memberships = await prisma.membership.findMany({
++    where: { userId, status: "ACTIVE" },
++    include: { organization: { include: { plan: true, subscription: true } } },
++  });
++  return {
++    user: { id: user.id, email: user.email, name: user.name },
++    currentOrganizationId: orgId,
++    memberships: memberships.map((m) => ({
++      role: m.role,
++      organization: {
++        id: m.organization.id,
++        name: m.organization.name,
++        slug: m.organization.slug,
++        planCode: m.organization.plan.code,
++        seatLimit: m.organization.seatLimit,
++        shopLimit: m.organization.shopLimit,
++        subscriptionStatus: m.organization.subscription?.status ?? null,
++      },
++    })),
++  };
++}
+diff --git a/src/modules/auth/refresh-store.ts b/src/modules/auth/refresh-store.ts
+new file mode 100644
+index 0000000..10c86ba
+--- /dev/null
++++ b/src/modules/auth/refresh-store.ts
+@@ -0,0 +1,109 @@
++import { redis } from "../../lib/redis.js";
++import { env } from "../../config/env.js";
++
++/** In-process mirror used when Redis is unreachable (tests / brief outage). */
++const memory = new Map<string, number>();
++let redisAvailable: boolean | null = null;
++
++async function ensureRedis(): Promise<boolean> {
++  if (redisAvailable === false) return false;
++  if (redis.status === "ready") {
++    redisAvailable = true;
++    return true;
++  }
++
++  if (
++    redis.status === "wait" ||
++    redis.status === "end" ||
++    redis.status === "close"
++  ) {
++    try {
++      await Promise.race([
++        redis.connect(),
++        new Promise((_, reject) =>
++          setTimeout(() => reject(new Error("Redis connect timeout")), 2000)
++        ),
++      ]);
++      if (redis.status === "ready") {
++        redisAvailable = true;
++        return true;
++      }
++    } catch {
++      redisAvailable = false;
++      if (env.NODE_ENV === "test") return false;
++      throw new Error("Redis unavailable");
++    }
++  }
++
++  if (redis.status === "connecting" || redis.status === "connect" || redis.status === "reconnecting") {
++    try {
++      await new Promise<void>((resolve, reject) => {
++        const timer = setTimeout(
++          () => reject(new Error("Redis ready timeout")),
++          2000
++        );
++        const onReady = () => {
++          clearTimeout(timer);
++          cleanup();
++          resolve();
++        };
++        const onError = (err: Error) => {
++          clearTimeout(timer);
++          cleanup();
++          reject(err);
++        };
++        const cleanup = () => {
++          redis.off("ready", onReady);
++          redis.off("error", onError);
++        };
++        redis.once("ready", onReady);
++        redis.once("error", onError);
++      });
++      redisAvailable = true;
++      return true;
++    } catch {
++      redisAvailable = false;
++      if (env.NODE_ENV === "test") return false;
++      throw new Error("Redis unavailable");
++    }
++  }
++
++  redisAvailable = false;
++  if (env.NODE_ENV === "test") return false;
++  throw new Error("Redis unavailable");
++}
++
++function memoryAlive(hash: string) {
++  const exp = memory.get(hash);
++  if (!exp) return false;
++  if (exp < Date.now()) {
++    memory.delete(hash);
++    return false;
++  }
++  return true;
++}
++
++export async function mirrorRefresh(hash: string, ttlSec: number) {
++  memory.set(hash, Date.now() + ttlSec * 1000);
++  if (await ensureRedis()) {
++    await redis.set(`refresh:${hash}`, "1", "EX", ttlSec);
++  }
++}
++
++export async function revokeRefreshMirror(hash: string) {
++  memory.delete(hash);
++  if (await ensureRedis()) {
++    await redis.del(`refresh:${hash}`);
++  }
++}
++
++export async function isRefreshMirrored(hash: string) {
++  if (await ensureRedis()) {
++    return (await redis.exists(`refresh:${hash}`)) === 1;
++  }
++  return memoryAlive(hash);
++}
++
++export function refreshTtl() {
++  return env.REFRESH_TOKEN_TTL_SEC;
++}
+diff --git a/tests/auth/auth.http.test.ts b/tests/auth/auth.http.test.ts
+new file mode 100644
+index 0000000..1cdfc95
+--- /dev/null
++++ b/tests/auth/auth.http.test.ts
+@@ -0,0 +1,66 @@
++import { describe, it, expect, afterAll } from "vitest";
++import request from "supertest";
++import { createApp } from "../../src/app.js";
++import { prisma } from "../../src/lib/prisma.js";
++import { redis } from "../../src/lib/redis.js";
++
++describe("auth HTTP", () => {
++  const email = `http_owner_${Date.now()}@test.com`;
++  const password = "Secret123!";
++  const app = createApp();
++
++  afterAll(async () => {
++    const user = await prisma.user.findUnique({ where: { email } });
++    if (user) {
++      await prisma.refreshToken.deleteMany({ where: { userId: user.id } });
++      const memberships = await prisma.membership.findMany({
++        where: { userId: user.id },
++      });
++      const orgIds = memberships.map((m) => m.organizationId);
++      await prisma.membership.deleteMany({ where: { userId: user.id } });
++      if (orgIds.length) {
++        await prisma.organization.deleteMany({ where: { id: { in: orgIds } } });
++      }
++      await prisma.user.deleteMany({ where: { email } });
++    }
++    await prisma.$disconnect();
++    if (redis.status === "ready") await redis.quit();
++  });
++
++  it("register ΓåÆ me ΓåÆ refresh", async () => {
++    const registerRes = await request(app)
++      .post("/api/v1/auth/register")
++      .send({
++        email,
++        password,
++        name: "Ashir",
++        organizationName: "HTTP Org",
++      });
++
++    expect(registerRes.status).toBe(201);
++    expect(registerRes.body.accessToken).toBeTruthy();
++    expect(registerRes.body.refreshToken).toBeTruthy();
++    expect(registerRes.headers["set-cookie"]).toBeDefined();
++
++    const accessToken = registerRes.body.accessToken as string;
++    const refreshToken = registerRes.body.refreshToken as string;
++
++    const meRes = await request(app)
++      .get("/api/v1/auth/me")
++      .set("Authorization", `Bearer ${accessToken}`);
++
++    expect(meRes.status).toBe(200);
++    expect(meRes.body.user.email).toBe(email);
++    expect(meRes.body.memberships?.[0]?.role).toBe("OWNER");
++    expect(meRes.body.memberships?.[0]?.organization?.planCode).toBe("free");
++
++    const refreshRes = await request(app)
++      .post("/api/v1/auth/refresh")
++      .send({ refreshToken });
++
++    expect(refreshRes.status).toBe(200);
++    expect(refreshRes.body.accessToken).toBeTruthy();
++    expect(refreshRes.body.refreshToken).toBeTruthy();
++    expect(refreshRes.body.refreshToken).not.toBe(refreshToken);
++  }, 60000);
++});
+diff --git a/tests/auth/auth.service.test.ts b/tests/auth/auth.service.test.ts
+new file mode 100644
+index 0000000..1b5bbf6
+--- /dev/null
++++ b/tests/auth/auth.service.test.ts
+@@ -0,0 +1,53 @@
++import { describe, it, expect, afterAll } from "vitest";
++import { prisma } from "../../src/lib/prisma.js";
++import { register, login } from "../../src/modules/auth/auth.service.js";
++import { redis } from "../../src/lib/redis.js";
++
++describe("auth.service", () => {
++  const email = `owner_${Date.now()}@test.com`;
++
++  afterAll(async () => {
++    try {
++      const user = await prisma.user.findUnique({ where: { email } });
++      if (user) {
++        await prisma.refreshToken.deleteMany({ where: { userId: user.id } });
++        const memberships = await prisma.membership.findMany({
++          where: { userId: user.id },
++        });
++        const orgIds = memberships.map((m) => m.organizationId);
++        await prisma.membership.deleteMany({ where: { userId: user.id } });
++        if (orgIds.length) {
++          await prisma.organization.deleteMany({ where: { id: { in: orgIds } } });
++        }
++        await prisma.user.deleteMany({ where: { email } });
++      }
++    } finally {
++      await prisma.$disconnect();
++      if (redis.status === "ready") await redis.quit();
++    }
++  });
++
++  it("registers user with OWNER membership on free plan", async () => {
++    const result = await register({
++      email,
++      password: "Secret123!",
++      name: "Ashir",
++      organizationName: "Tiksly Test",
++    });
++    expect(result.user.email).toBe(email);
++    expect(result.organization.slug).toBeTruthy();
++    expect(result.accessToken).toBeTruthy();
++    expect(result.refreshToken).toBeTruthy();
++
++    const membership = await prisma.membership.findFirst({
++      where: { user: { email } },
++    });
++    expect(membership?.role).toBe("OWNER");
++    expect(membership?.status).toBe("ACTIVE");
++  }, 60000);
++
++  it("logs in with same credentials", async () => {
++    const result = await login({ email, password: "Secret123!" });
++    expect(result.accessToken).toBeTruthy();
++  }, 60000);
++});
+diff --git a/tests/setup.ts b/tests/setup.ts
+index e86e59e..2510578 100644
+--- a/tests/setup.ts
++++ b/tests/setup.ts
+@@ -1,6 +1,16 @@
+-process.env.DATABASE_URL ??= "postgresql://user:pass@localhost:5432/affiliate_tool_test";
++import "dotenv/config";
++
++process.env.DATABASE_URL ??=
++  "postgresql://user:pass@localhost:5432/affiliate_tool_test";
+ process.env.REDIS_URL ??= "redis://127.0.0.1:6379";
+-process.env.JWT_ACCESS_SECRET ??= "test-access-secret-32-chars-minimum!!";
+-process.env.JWT_REFRESH_SECRET ??= "test-refresh-secret-32-chars-minimum!";
+-process.env.SESSION_VAULT_KEY ??= "12345678901234567890123456789012";
++// Ensure JWT/vault secrets meet env schema min length for tests
++if (!process.env.JWT_ACCESS_SECRET || process.env.JWT_ACCESS_SECRET.length < 32) {
++  process.env.JWT_ACCESS_SECRET = "test-access-secret-32-chars-minimum!!";
++}
++if (!process.env.JWT_REFRESH_SECRET || process.env.JWT_REFRESH_SECRET.length < 32) {
++  process.env.JWT_REFRESH_SECRET = "test-refresh-secret-32-chars-minimum!";
++}
++if (!process.env.SESSION_VAULT_KEY || process.env.SESSION_VAULT_KEY.length < 32) {
++  process.env.SESSION_VAULT_KEY = "12345678901234567890123456789012";
++}
+ process.env.NODE_ENV = "test";
+diff --git a/vitest.config.ts b/vitest.config.ts
+index 0bd9a52..78ab16a 100644
+--- a/vitest.config.ts
++++ b/vitest.config.ts
+@@ -1,9 +1,10 @@
+ import { defineConfig } from "vitest/config";
+ 
+ export default defineConfig({
+   test: {
+     environment: "node",
+     include: ["tests/**/*.test.ts"],
+     setupFiles: ["tests/setup.ts"],
++    testTimeout: 30000,
+   },
+ });
+

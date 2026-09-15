@@ -1,0 +1,653 @@
+﻿# Review Task 6
+BASE: c52d9e5077961bfa3159c0522ff7255007959453
+HEAD: 79e25fcf498800793a3b58498d335b3409a430f6
+## Commits
+79e25fc feat: add Stripe checkout, portal, and idempotent webhooks
+
+## Stat
+ package.json                           |   1 +
+ src/app.ts                             |  11 +-
+ src/modules/billing/billing.routes.ts  | 101 ++++++++++++++
+ src/modules/billing/billing.service.ts |  87 ++++++++++++
+ src/modules/billing/stripe.ts          |  23 ++++
+ src/modules/billing/webhook.service.ts | 240 +++++++++++++++++++++++++++++++++
+ tests/billing/webhook.service.test.ts  |  90 +++++++++++++
+ 7 files changed, 552 insertions(+), 1 deletion(-)
+
+## Diff
+diff --git a/package.json b/package.json
+index e82166c..e694373 100644
+--- a/package.json
++++ b/package.json
+@@ -31,16 +31,17 @@
+     "argon2": "^0.45.1",
+     "cookie-parser": "^1.4.7",
+     "cors": "^2.8.6",
+     "dotenv": "^17.4.2",
+     "express": "^5.2.1",
+     "helmet": "^8.3.0",
+     "ioredis": "^6.0.0",
+     "jose": "^6.2.12",
++    "stripe": "^22.6.2",
+     "zod": "^4.6.5"
+   },
+   "devDependencies": {
+     "@types/cookie-parser": "^1.4.10",
+     "@types/cors": "^2.8.19",
+     "@types/express": "^5.0.6",
+     "@types/node": "^26.6.0",
+     "@types/supertest": "^7.2.1",
+diff --git a/src/app.ts b/src/app.ts
+index 654df35..ac0826a 100644
+--- a/src/app.ts
++++ b/src/app.ts
+@@ -1,27 +1,36 @@
+ import express from "express";
+ import cors from "cors";
+ import helmet from "helmet";
+ import cookieParser from "cookie-parser";
+ import { env } from "./config/env.js";
+ import { errorHandler } from "./middleware/error-handler.js";
+ import { authRoutes } from "./modules/auth/auth.routes.js";
+ import { orgsRoutes } from "./modules/orgs/orgs.routes.js";
++import {
++  billingRoutes,
++  billingWebhookHandler,
++} from "./modules/billing/billing.routes.js";
+ 
+ export function createApp() {
+   const app = express();
+   app.use(helmet());
+   app.use(
+     cors({
+       origin: env.CORS_ORIGINS.split(",").map((s) => s.trim()),
+       credentials: true,
+     })
+   );
+   app.use(cookieParser());
+   app.get("/health", (_req, res) => res.json({ ok: true }));
+-  // JSON parser for non-webhook routes (billing webhook raw body added in Task 8)
++  app.post(
++    "/api/v1/webhooks/stripe",
++    express.raw({ type: "application/json" }),
++    billingWebhookHandler
++  );
+   app.use(express.json());
+   app.use("/api/v1/auth", authRoutes);
+   app.use("/api/v1/orgs", orgsRoutes);
++  app.use("/api/v1/billing", billingRoutes);
+   app.use(errorHandler);
+   return app;
+ }
+diff --git a/src/modules/billing/billing.routes.ts b/src/modules/billing/billing.routes.ts
+new file mode 100644
+index 0000000..0ad3ac5
+--- /dev/null
++++ b/src/modules/billing/billing.routes.ts
+@@ -0,0 +1,101 @@
++import { Router, type RequestHandler } from "express";
++import { z } from "zod";
++import { prisma } from "../../lib/prisma.js";
++import { AppError } from "../../lib/errors.js";
++import { env } from "../../config/env.js";
++import { validateBody } from "../../middleware/validate.js";
++import { authenticate } from "../../middleware/authenticate.js";
++import { requireOrg } from "../../middleware/require-org.js";
++import { requireRole } from "../../middleware/require-role.js";
++import { getStripe } from "./stripe.js";
++import { handleStripeEvent } from "./webhook.service.js";
++import {
++  createCheckoutSession,
++  createPortalSession,
++  listPlans,
++} from "./billing.service.js";
++
++const checkoutSessionSchema = z.object({
++  planCode: z.string().min(1),
++});
++
++export const billingRoutes = Router();
++
++billingRoutes.get("/plans", async (_req, res, next) => {
++  try {
++    const plans = await listPlans();
++    res.json({ plans });
++  } catch (err) {
++    next(err);
++  }
++});
++
++billingRoutes.post(
++  "/checkout-session",
++  authenticate,
++  requireOrg,
++  requireRole("OWNER", "ADMIN"),
++  validateBody(checkoutSessionSchema),
++  async (req, res, next) => {
++    try {
++      if (!req.auth) {
++        throw new AppError("UNAUTHORIZED", "Missing access token", 401);
++      }
++      const user = await prisma.user.findUniqueOrThrow({
++        where: { id: req.auth.sub },
++      });
++      const session = await createCheckoutSession({
++        organizationId: req.auth.orgId,
++        planCode: req.body.planCode,
++        actorEmail: user.email,
++      });
++      res.json(session);
++    } catch (err) {
++      next(err);
++    }
++  }
++);
++
++billingRoutes.post(
++  "/portal-session",
++  authenticate,
++  requireOrg,
++  requireRole("OWNER", "ADMIN"),
++  async (req, res, next) => {
++    try {
++      if (!req.auth) {
++        throw new AppError("UNAUTHORIZED", "Missing access token", 401);
++      }
++      const session = await createPortalSession({
++        organizationId: req.auth.orgId,
++      });
++      res.json(session);
++    } catch (err) {
++      next(err);
++    }
++  }
++);
++
++export const billingWebhookHandler: RequestHandler = async (req, res, next) => {
++  try {
++    if (!env.STRIPE_WEBHOOK_SECRET) {
++      throw new AppError("INTERNAL", "Stripe webhook secret is not configured", 500);
++    }
++    const signature = req.headers["stripe-signature"];
++    if (!signature || typeof signature !== "string") {
++      throw new AppError("UNAUTHORIZED", "Missing Stripe signature", 401);
++    }
++
++    const stripe = getStripe();
++    const event = stripe.webhooks.constructEvent(
++      req.body,
++      signature,
++      env.STRIPE_WEBHOOK_SECRET
++    );
++
++    await handleStripeEvent(event as any);
++    res.json({ received: true });
++  } catch (err) {
++    next(err);
++  }
++};
+diff --git a/src/modules/billing/billing.service.ts b/src/modules/billing/billing.service.ts
+new file mode 100644
+index 0000000..a6a8bf4
+--- /dev/null
++++ b/src/modules/billing/billing.service.ts
+@@ -0,0 +1,87 @@
++import { prisma } from "../../lib/prisma.js";
++import { AppError } from "../../lib/errors.js";
++import { getStripe, portalBaseUrl } from "./stripe.js";
++
++export async function listPlans() {
++  const plans = await prisma.plan.findMany({
++    orderBy: { monthlyPriceCents: "asc" },
++  });
++  return plans.map((p) => ({
++    id: p.id,
++    code: p.code,
++    name: p.name,
++    monthlyPriceCents: p.monthlyPriceCents,
++    seatLimit: p.seatLimit,
++    shopLimit: p.shopLimit,
++    dailyInviteQuota: p.dailyInviteQuota,
++  }));
++}
++
++export async function createCheckoutSession(input: {
++  organizationId: string;
++  planCode: string;
++  actorEmail: string;
++}) {
++  const plan = await prisma.plan.findUnique({
++    where: { code: input.planCode },
++  });
++  if (!plan) {
++    throw new AppError("NOT_FOUND", "Plan not found", 404);
++  }
++  if (!plan.stripePriceId) {
++    throw new AppError(
++      "VALIDATION_ERROR",
++      "Plan is not available for checkout",
++      400
++    );
++  }
++  if (plan.code === "free") {
++    throw new AppError(
++      "VALIDATION_ERROR",
++      "Free plan does not require checkout",
++      400
++    );
++  }
++
++  const org = await prisma.organization.findUniqueOrThrow({
++    where: { id: input.organizationId },
++  });
++
++  const stripe = getStripe();
++  const base = portalBaseUrl();
++
++  const session = await stripe.checkout.sessions.create({
++    mode: "subscription",
++    customer: org.stripeCustomerId ?? undefined,
++    customer_email: org.stripeCustomerId ? undefined : input.actorEmail,
++    line_items: [{ price: plan.stripePriceId, quantity: 1 }],
++    success_url: `${base}/billing/success`,
++    cancel_url: `${base}/billing/cancel`,
++    metadata: { organizationId: org.id },
++    client_reference_id: org.id,
++  });
++
++  return { url: session.url, id: session.id };
++}
++
++export async function createPortalSession(input: { organizationId: string }) {
++  const org = await prisma.organization.findUniqueOrThrow({
++    where: { id: input.organizationId },
++  });
++  if (!org.stripeCustomerId) {
++    throw new AppError(
++      "VALIDATION_ERROR",
++      "Organization has no Stripe customer",
++      400
++    );
++  }
++
++  const stripe = getStripe();
++  const base = portalBaseUrl();
++  const session = await stripe.billingPortal.sessions.create({
++    customer: org.stripeCustomerId,
++    return_url: `${base}/billing`,
++  });
++
++  return { url: session.url };
++}
+diff --git a/src/modules/billing/stripe.ts b/src/modules/billing/stripe.ts
+new file mode 100644
+index 0000000..dc1c5da
+--- /dev/null
++++ b/src/modules/billing/stripe.ts
+@@ -0,0 +1,23 @@
++import Stripe from "stripe";
++import { env } from "../../config/env.js";
++import { AppError } from "../../lib/errors.js";
++
++let client: Stripe | null = null;
++
++export function getStripe(): Stripe {
++  if (!env.STRIPE_SECRET_KEY) {
++    throw new AppError("INTERNAL", "Stripe is not configured", 500);
++  }
++  if (!client) {
++    client = new Stripe(env.STRIPE_SECRET_KEY);
++  }
++  return client;
++}
++
++export function portalBaseUrl(): string {
++  const origin = env.CORS_ORIGINS.split(",")[0]?.trim();
++  if (!origin) {
++    throw new AppError("INTERNAL", "CORS_ORIGINS is not configured", 500);
++  }
++  return origin.replace(/\/$/, "");
++}
+diff --git a/src/modules/billing/webhook.service.ts b/src/modules/billing/webhook.service.ts
+new file mode 100644
+index 0000000..99671c2
+--- /dev/null
++++ b/src/modules/billing/webhook.service.ts
+@@ -0,0 +1,240 @@
++import type { SubscriptionStatus } from "@prisma/client";
++import { Prisma } from "@prisma/client";
++import { prisma } from "../../lib/prisma.js";
++import { AppError } from "../../lib/errors.js";
++
++type StripeLikeEvent = {
++  id: string;
++  type: string;
++  data: { object: Record<string, unknown> };
++};
++
++function mapSubscriptionStatus(status: string): SubscriptionStatus {
++  switch (status) {
++    case "trialing":
++      return "TRIALING";
++    case "active":
++      return "ACTIVE";
++    case "past_due":
++      return "PAST_DUE";
++    case "canceled":
++      return "CANCELED";
++    case "incomplete":
++    case "incomplete_expired":
++      return "INCOMPLETE";
++    default:
++      return "INCOMPLETE";
++  }
++}
++
++function asString(value: unknown): string | undefined {
++  return typeof value === "string" && value.length > 0 ? value : undefined;
++}
++
++function customerIdFrom(object: Record<string, unknown>): string | undefined {
++  const customer = object.customer;
++  if (typeof customer === "string") return customer;
++  if (customer && typeof customer === "object" && "id" in customer) {
++    return asString((customer as { id: unknown }).id);
++  }
++  return undefined;
++}
++
++function priceIdFromSubscription(object: Record<string, unknown>): string | undefined {
++  const items = object.items as
++    | { data?: Array<{ price?: string | { id?: string } }> }
++    | undefined;
++  const price = items?.data?.[0]?.price;
++  if (typeof price === "string") return price;
++  if (price && typeof price === "object") return asString(price.id);
++  return undefined;
++}
++
++function organizationIdFromSession(object: Record<string, unknown>): string | undefined {
++  const metadata = object.metadata as { organizationId?: unknown } | undefined;
++  return (
++    asString(object.client_reference_id) ?? asString(metadata?.organizationId)
++  );
++}
++
++async function resolveOrganization(input: {
++  stripeCustomerId?: string;
++  organizationId?: string;
++}) {
++  if (input.organizationId) {
++    const byId = await prisma.organization.findUnique({
++      where: { id: input.organizationId },
++    });
++    if (byId) return byId;
++  }
++  if (input.stripeCustomerId) {
++    return prisma.organization.findFirst({
++      where: { stripeCustomerId: input.stripeCustomerId },
++    });
++  }
++  return null;
++}
++
++async function applyPlanAndSubscription(input: {
++  organizationId: string;
++  stripeCustomerId?: string;
++  stripeSubscriptionId: string;
++  status: SubscriptionStatus;
++  currentPeriodEnd?: Date | null;
++  stripePriceId?: string;
++}) {
++  const data: {
++    stripeCustomerId?: string;
++    planId?: string;
++    seatLimit?: number;
++    shopLimit?: number;
++    dailyInviteQuota?: number;
++  } = {};
++
++  if (input.stripeCustomerId) {
++    data.stripeCustomerId = input.stripeCustomerId;
++  }
++
++  if (input.stripePriceId) {
++    const plan = await prisma.plan.findFirst({
++      where: { stripePriceId: input.stripePriceId },
++    });
++    if (plan) {
++      data.planId = plan.id;
++      data.seatLimit = plan.seatLimit;
++      data.shopLimit = plan.shopLimit;
++      data.dailyInviteQuota = plan.dailyInviteQuota;
++    }
++  }
++
++  await prisma.$transaction(async (tx) => {
++    if (Object.keys(data).length > 0) {
++      await tx.organization.update({
++        where: { id: input.organizationId },
++        data,
++      });
++    }
++
++    await tx.subscription.upsert({
++      where: { organizationId: input.organizationId },
++      create: {
++        organizationId: input.organizationId,
++        stripeSubscriptionId: input.stripeSubscriptionId,
++        status: input.status,
++        currentPeriodEnd: input.currentPeriodEnd ?? null,
++      },
++      update: {
++        stripeSubscriptionId: input.stripeSubscriptionId,
++        status: input.status,
++        currentPeriodEnd: input.currentPeriodEnd ?? null,
++      },
++    });
++  });
++}
++
++async function applyFromSubscription(object: Record<string, unknown>) {
++  const stripeSubscriptionId = asString(object.id);
++  if (!stripeSubscriptionId) {
++    throw new AppError("VALIDATION_ERROR", "Subscription missing id", 400);
++  }
++
++  const stripeCustomerId = customerIdFrom(object);
++  const metadata = object.metadata as { organizationId?: unknown } | undefined;
++  const org = await resolveOrganization({
++    stripeCustomerId,
++    organizationId: asString(metadata?.organizationId),
++  });
++  if (!org) {
++    throw new AppError("NOT_FOUND", "Organization not found for subscription", 404);
++  }
++
++  const periodEnd =
++    typeof object.current_period_end === "number"
++      ? new Date(object.current_period_end * 1000)
++      : null;
++
++  await applyPlanAndSubscription({
++    organizationId: org.id,
++    stripeCustomerId,
++    stripeSubscriptionId,
++    status: mapSubscriptionStatus(asString(object.status) ?? "incomplete"),
++    currentPeriodEnd: periodEnd,
++    stripePriceId: priceIdFromSubscription(object),
++  });
++}
++
++async function applyFromCheckoutSession(object: Record<string, unknown>) {
++  const organizationId = organizationIdFromSession(object);
++  const stripeCustomerId = customerIdFrom(object);
++  const org = await resolveOrganization({ organizationId, stripeCustomerId });
++  if (!org) {
++    throw new AppError("NOT_FOUND", "Organization not found for checkout session", 404);
++  }
++
++  if (stripeCustomerId && org.stripeCustomerId !== stripeCustomerId) {
++    await prisma.organization.update({
++      where: { id: org.id },
++      data: { stripeCustomerId },
++    });
++  }
++
++  const subscription = object.subscription;
++  if (subscription && typeof subscription === "object") {
++    await applyFromSubscription(subscription as Record<string, unknown>);
++    return;
++  }
++
++  const stripeSubscriptionId = asString(subscription);
++  if (!stripeSubscriptionId) return;
++
++  // Session only has subscription id ΓÇö record placeholder; subscription.* events fill details
++  await prisma.subscription.upsert({
++    where: { organizationId: org.id },
++    create: {
++      organizationId: org.id,
++      stripeSubscriptionId,
++      status: "INCOMPLETE",
++      currentPeriodEnd: null,
++    },
++    update: {
++      stripeSubscriptionId,
++    },
++  });
++}
++
++/**
++ * Idempotent Stripe event processor.
++ * Claims the event id first; duplicates return without re-applying side effects.
++ */
++export async function handleStripeEvent(event: StripeLikeEvent): Promise<void> {
++  try {
++    await prisma.stripeEvent.create({
++      data: {
++        eventId: event.id,
++        type: event.type,
++      },
++    });
++  } catch (err) {
++    if (
++      err instanceof Prisma.PrismaClientKnownRequestError &&
++      err.code === "P2002"
++    ) {
++      return;
++    }
++    throw err;
++  }
++
++  const object = event.data?.object ?? {};
++
++  if (event.type === "checkout.session.completed") {
++    await applyFromCheckoutSession(object);
++    return;
++  }
++
++  if (event.type.startsWith("customer.subscription.")) {
++    await applyFromSubscription(object);
++  }
++}
++
++/** Alias matching plan interface name. */
++export const applySubscriptionFromStripe = handleStripeEvent;
+diff --git a/tests/billing/webhook.service.test.ts b/tests/billing/webhook.service.test.ts
+new file mode 100644
+index 0000000..d970b92
+--- /dev/null
++++ b/tests/billing/webhook.service.test.ts
+@@ -0,0 +1,90 @@
++import { describe, it, expect, beforeAll, afterAll } from "vitest";
++import { prisma } from "../../src/lib/prisma.js";
++import { handleStripeEvent } from "../../src/modules/billing/webhook.service.js";
++
++describe("billing webhook service", () => {
++  const suffix = Date.now();
++  const customerId = `cus_test_${suffix}`;
++  const priceId = `price_growth_${suffix}`;
++  const subscriptionId = `sub_test_${suffix}`;
++
++  let orgId = "";
++  let growthPlanId = "";
++
++  beforeAll(async () => {
++    const free = await prisma.plan.findUniqueOrThrow({ where: { code: "free" } });
++    const growth = await prisma.plan.findUniqueOrThrow({ where: { code: "growth" } });
++    growthPlanId = growth.id;
++
++    await prisma.plan.update({
++      where: { id: growth.id },
++      data: { stripePriceId: priceId },
++    });
++
++    const org = await prisma.organization.create({
++      data: {
++        name: `Billing Org ${suffix}`,
++        slug: `billing-org-${suffix}`,
++        planId: free.id,
++        stripeCustomerId: customerId,
++        seatLimit: free.seatLimit,
++        shopLimit: free.shopLimit,
++        dailyInviteQuota: free.dailyInviteQuota,
++      },
++    });
++    orgId = org.id;
++  }, 60000);
++
++  afterAll(async () => {
++    try {
++      await prisma.subscription.deleteMany({ where: { organizationId: orgId } });
++      await prisma.organization.deleteMany({ where: { id: orgId } });
++      await prisma.stripeEvent.deleteMany({
++        where: { eventId: { startsWith: `evt_test_${suffix}` } },
++      });
++      // Restore seeded growth price id (usually null without env)
++      await prisma.plan.update({
++        where: { id: growthPlanId },
++        data: { stripePriceId: process.env.STRIPE_PRICE_GROWTH ?? null },
++      });
++    } finally {
++      await prisma.$disconnect();
++    }
++  });
++
++  it("ignores duplicate stripe event ids", async () => {
++    const event = {
++      id: `evt_test_${suffix}`,
++      type: "customer.subscription.updated",
++      data: {
++        object: {
++          id: subscriptionId,
++          status: "active",
++          customer: customerId,
++          items: { data: [{ price: { id: priceId } }] },
++          current_period_end: Math.floor(Date.now() / 1000) + 86400,
++        },
++      },
++    };
++
++    await handleStripeEvent(event as any);
++    await handleStripeEvent(event as any);
++
++    const count = await prisma.stripeEvent.count({
++      where: { eventId: event.id },
++    });
++    expect(count).toBe(1);
++
++    const org = await prisma.organization.findUniqueOrThrow({
++      where: { id: orgId },
++      include: { subscription: true, plan: true },
++    });
++    expect(org.planId).toBe(growthPlanId);
++    expect(org.plan.code).toBe("growth");
++    expect(org.seatLimit).toBe(3);
++    expect(org.shopLimit).toBe(3);
++    expect(org.dailyInviteQuota).toBe(1500);
++    expect(org.subscription?.stripeSubscriptionId).toBe(subscriptionId);
++    expect(org.subscription?.status).toBe("ACTIVE");
++  });
++});
+

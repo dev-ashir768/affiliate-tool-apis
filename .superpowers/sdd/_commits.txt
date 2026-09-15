@@ -1,0 +1,16 @@
+﻿b9d2115 docs: add Foundation README, rate limits, and smoke script
+77eeedd fix: do not leave shop VERIFYING when enqueue fails
+3d5c336 feat: add shop-verify BullMQ worker with stub and Playwright scaffold
+3b6f600 fix: release botIdentity FK on shop disconnect
+010e86b feat: add shop connect, list, and disconnect with bot reservation
+69fff64 fix: roll back StripeEvent claim when webhook apply fails
+79e25fc feat: add Stripe checkout, portal, and idempotent webhooks
+c52d9e5 fix: require auth when accepting invites for existing users
+cb676a9 feat: add org current endpoints and seat-limited invites
+1d9fece fix: prefer refresh_token cookie over body token
+f224536 feat: implement JWT auth register, login, refresh, logout, me
+a405986 feat: implement JWT auth register, login, refresh, logout, me
+812c540 feat: add password hashing, JWT helpers, crypto, and Redis client
+ece35fe fix: use prisma migrate deploy for prisma:migrate script
+b814874 feat: add Foundation Prisma schema, migrate, and seed
+0a69dae chore: scaffold Express TypeScript API with health check

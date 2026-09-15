@@ -1,0 +1,769 @@
+﻿# Review package Task 5
+BASE: 1d9fece5eb160b05b0a1c2f9c50ff720cd26971f
+HEAD: cb676a93467db0b3176296df8b92b8f3d3c28af2
+## Commits
+cb676a9 feat: add org current endpoints and seat-limited invites
+
+## Stat
+ src/app.ts                       |   2 +
+ src/middleware/require-org.ts    |  34 ++++++
+ src/middleware/require-role.ts   |  17 +++
+ src/modules/orgs/orgs.routes.ts  | 130 ++++++++++++++++++++
+ src/modules/orgs/orgs.schemas.ts |  15 +++
+ src/modules/orgs/orgs.service.ts | 252 +++++++++++++++++++++++++++++++++++++++
+ tests/orgs/invites.test.ts       | 235 ++++++++++++++++++++++++++++++++++++
+ 7 files changed, 685 insertions(+)
+
+## Diff
+diff --git a/src/app.ts b/src/app.ts
+index 05cfa7b..654df35 100644
+--- a/src/app.ts
++++ b/src/app.ts
+@@ -1,25 +1,27 @@
+ import express from "express";
+ import cors from "cors";
+ import helmet from "helmet";
+ import cookieParser from "cookie-parser";
+ import { env } from "./config/env.js";
+ import { errorHandler } from "./middleware/error-handler.js";
+ import { authRoutes } from "./modules/auth/auth.routes.js";
++import { orgsRoutes } from "./modules/orgs/orgs.routes.js";
+ 
+ export function createApp() {
+   const app = express();
+   app.use(helmet());
+   app.use(
+     cors({
+       origin: env.CORS_ORIGINS.split(",").map((s) => s.trim()),
+       credentials: true,
+     })
+   );
+   app.use(cookieParser());
+   app.get("/health", (_req, res) => res.json({ ok: true }));
+   // JSON parser for non-webhook routes (billing webhook raw body added in Task 8)
+   app.use(express.json());
+   app.use("/api/v1/auth", authRoutes);
++  app.use("/api/v1/orgs", orgsRoutes);
+   app.use(errorHandler);
+   return app;
+ }
+diff --git a/src/middleware/require-org.ts b/src/middleware/require-org.ts
+new file mode 100644
+index 0000000..9ab43a8
+--- /dev/null
++++ b/src/middleware/require-org.ts
+@@ -0,0 +1,34 @@
++import type { RequestHandler } from "express";
++import type { Membership } from "@prisma/client";
++import { prisma } from "../lib/prisma.js";
++import { AppError } from "../lib/errors.js";
++
++declare global {
++  namespace Express {
++    interface Request {
++      membership?: Membership;
++    }
++  }
++}
++
++export const requireOrg: RequestHandler = async (req, _res, next) => {
++  try {
++    if (!req.auth) {
++      throw new AppError("UNAUTHORIZED", "Missing access token", 401);
++    }
++    const membership = await prisma.membership.findFirst({
++      where: {
++        userId: req.auth.sub,
++        organizationId: req.auth.orgId,
++        status: "ACTIVE",
++      },
++    });
++    if (!membership) {
++      throw new AppError("FORBIDDEN", "No active membership for organization", 403);
++    }
++    req.membership = membership;
++    next();
++  } catch (err) {
++    next(err);
++  }
++};
+diff --git a/src/middleware/require-role.ts b/src/middleware/require-role.ts
+new file mode 100644
+index 0000000..14a0dad
+--- /dev/null
++++ b/src/middleware/require-role.ts
+@@ -0,0 +1,17 @@
++import type { RequestHandler } from "express";
++import type { MembershipRole } from "@prisma/client";
++import { AppError } from "../lib/errors.js";
++
++export function requireRole(...roles: MembershipRole[]): RequestHandler {
++  return (req, _res, next) => {
++    try {
++      const role = req.membership?.role ?? req.auth?.role;
++      if (!role || !roles.includes(role)) {
++        throw new AppError("FORBIDDEN", "Insufficient role", 403);
++      }
++      next();
++    } catch (err) {
++      next(err);
++    }
++  };
++}
+diff --git a/src/modules/orgs/orgs.routes.ts b/src/modules/orgs/orgs.routes.ts
+new file mode 100644
+index 0000000..66fd909
+--- /dev/null
++++ b/src/modules/orgs/orgs.routes.ts
+@@ -0,0 +1,130 @@
++import { Router } from "express";
++import { AppError } from "../../lib/errors.js";
++import { validateBody } from "../../middleware/validate.js";
++import { authenticate } from "../../middleware/authenticate.js";
++import { requireOrg } from "../../middleware/require-org.js";
++import { requireRole } from "../../middleware/require-role.js";
++import { verifyAccessToken } from "../../lib/tokens.js";
++import {
++  acceptInviteSchema,
++  createInviteSchema,
++  patchCurrentOrgSchema,
++} from "./orgs.schemas.js";
++import {
++  acceptInvite,
++  createInvite,
++  getCurrent,
++  listMembers,
++  patchCurrent,
++} from "./orgs.service.js";
++
++export const orgsRoutes = Router();
++
++orgsRoutes.get(
++  "/current",
++  authenticate,
++  requireOrg,
++  async (req, res, next) => {
++    try {
++      if (!req.auth) {
++        throw new AppError("UNAUTHORIZED", "Missing access token", 401);
++      }
++      const org = await getCurrent(req.auth.orgId);
++      res.json(org);
++    } catch (err) {
++      next(err);
++    }
++  }
++);
++
++orgsRoutes.patch(
++  "/current",
++  authenticate,
++  requireOrg,
++  requireRole("OWNER", "ADMIN"),
++  validateBody(patchCurrentOrgSchema),
++  async (req, res, next) => {
++    try {
++      if (!req.auth) {
++        throw new AppError("UNAUTHORIZED", "Missing access token", 401);
++      }
++      const org = await patchCurrent(req.auth.orgId, req.body);
++      res.json(org);
++    } catch (err) {
++      next(err);
++    }
++  }
++);
++
++orgsRoutes.get(
++  "/current/members",
++  authenticate,
++  requireOrg,
++  async (req, res, next) => {
++    try {
++      if (!req.auth) {
++        throw new AppError("UNAUTHORIZED", "Missing access token", 401);
++      }
++      const members = await listMembers(req.auth.orgId);
++      res.json({ members });
++    } catch (err) {
++      next(err);
++    }
++  }
++);
++
++orgsRoutes.post(
++  "/current/invites",
++  authenticate,
++  requireOrg,
++  requireRole("OWNER", "ADMIN"),
++  validateBody(createInviteSchema),
++  async (req, res, next) => {
++    try {
++      if (!req.auth) {
++        throw new AppError("UNAUTHORIZED", "Missing access token", 401);
++      }
++      const result = await createInvite({
++        organizationId: req.auth.orgId,
++        actorUserId: req.auth.sub,
++        email: req.body.email,
++        role: req.body.role,
++      });
++      res.status(201).json(result);
++    } catch (err) {
++      next(err);
++    }
++  }
++);
++
++orgsRoutes.post(
++  "/invites/:token/accept",
++  validateBody(acceptInviteSchema),
++  async (req, res, next) => {
++    try {
++      let actorUserId: string | undefined;
++      const header = req.headers.authorization;
++      if (header?.startsWith("Bearer ")) {
++        const token = header.slice("Bearer ".length).trim();
++        if (token) {
++          try {
++            const claims = await verifyAccessToken(token);
++            actorUserId = claims.sub;
++          } catch {
++            // Optional auth: fall through to password+name path for stubs
++          }
++        }
++      }
++
++      const result = await acceptInvite({
++        token: String(req.params.token),
++        password: req.body.password,
++        name: req.body.name,
++        actorUserId,
++      });
++      res.json(result);
++    } catch (err) {
++      next(err);
++    }
++  }
++);
+diff --git a/src/modules/orgs/orgs.schemas.ts b/src/modules/orgs/orgs.schemas.ts
+new file mode 100644
+index 0000000..dc98c67
+--- /dev/null
++++ b/src/modules/orgs/orgs.schemas.ts
+@@ -0,0 +1,15 @@
++import { z } from "zod";
++
++export const createInviteSchema = z.object({
++  email: z.string().email(),
++  role: z.enum(["ADMIN", "MEMBER"]),
++});
++
++export const patchCurrentOrgSchema = z.object({
++  name: z.string().min(1),
++});
++
++export const acceptInviteSchema = z.object({
++  password: z.string().min(8).optional(),
++  name: z.string().min(1).optional(),
++});
+diff --git a/src/modules/orgs/orgs.service.ts b/src/modules/orgs/orgs.service.ts
+new file mode 100644
+index 0000000..e3050ee
+--- /dev/null
++++ b/src/modules/orgs/orgs.service.ts
+@@ -0,0 +1,252 @@
++import { randomBytes } from "node:crypto";
++import type { MembershipRole } from "@prisma/client";
++import { prisma } from "../../lib/prisma.js";
++import { AppError } from "../../lib/errors.js";
++import { sha256 } from "../../lib/crypto.js";
++import { hashPassword } from "../../lib/password.js";
++import { env } from "../../config/env.js";
++
++function generateInviteToken(): { raw: string; hash: string } {
++  const raw = randomBytes(32).toString("base64url");
++  return { raw, hash: sha256(raw) };
++}
++
++async function countSeats(organizationId: string): Promise<number> {
++  return prisma.membership.count({
++    where: {
++      organizationId,
++      status: { in: ["ACTIVE", "INVITED"] },
++    },
++  });
++}
++
++export async function getCurrent(organizationId: string) {
++  const org = await prisma.organization.findUniqueOrThrow({
++    where: { id: organizationId },
++    include: { plan: true, subscription: true },
++  });
++  return {
++    id: org.id,
++    name: org.name,
++    slug: org.slug,
++    seatLimit: org.seatLimit,
++    shopLimit: org.shopLimit,
++    dailyInviteQuota: org.dailyInviteQuota,
++    plan: {
++      id: org.plan.id,
++      code: org.plan.code,
++      name: org.plan.name,
++    },
++    subscriptionStatus: org.subscription?.status ?? null,
++  };
++}
++
++export async function patchCurrent(
++  organizationId: string,
++  input: { name: string }
++) {
++  const org = await prisma.organization.update({
++    where: { id: organizationId },
++    data: { name: input.name },
++    include: { plan: true, subscription: true },
++  });
++  return {
++    id: org.id,
++    name: org.name,
++    slug: org.slug,
++    seatLimit: org.seatLimit,
++    shopLimit: org.shopLimit,
++    dailyInviteQuota: org.dailyInviteQuota,
++    plan: {
++      id: org.plan.id,
++      code: org.plan.code,
++      name: org.plan.name,
++    },
++    subscriptionStatus: org.subscription?.status ?? null,
++  };
++}
++
++export async function listMembers(organizationId: string) {
++  const members = await prisma.membership.findMany({
++    where: { organizationId },
++    include: { user: true },
++    orderBy: { createdAt: "asc" },
++  });
++  return members.map((m) => ({
++    id: m.id,
++    role: m.role,
++    status: m.status,
++    user: {
++      id: m.user.id,
++      email: m.user.email,
++      name: m.user.name,
++    },
++  }));
++}
++
++export async function createInvite(input: {
++  organizationId: string;
++  actorUserId: string;
++  email: string;
++  role: Exclude<MembershipRole, "OWNER">;
++}) {
++  const email = input.email.toLowerCase().trim();
++  const org = await prisma.organization.findUniqueOrThrow({
++    where: { id: input.organizationId },
++  });
++
++  const seats = await countSeats(input.organizationId);
++  if (seats >= org.seatLimit) {
++    throw new AppError("PLAN_LIMIT", "Seat limit reached", 403);
++  }
++
++  let user = await prisma.user.findUnique({ where: { email } });
++  let createdStub = false;
++  if (!user) {
++    user = await prisma.user.create({
++      data: {
++        email,
++        passwordHash: await hashPassword(randomBytes(32).toString("base64url")),
++        name: "Invited",
++      },
++    });
++    createdStub = true;
++  }
++
++  const existing = await prisma.membership.findUnique({
++    where: {
++      userId_organizationId: {
++        userId: user.id,
++        organizationId: input.organizationId,
++      },
++    },
++  });
++  if (existing?.status === "ACTIVE") {
++    if (createdStub) {
++      await prisma.user.delete({ where: { id: user.id } }).catch(() => undefined);
++    }
++    throw new AppError("CONFLICT", "User is already a member", 409);
++  }
++  if (existing?.status === "INVITED") {
++    if (createdStub) {
++      await prisma.user.delete({ where: { id: user.id } }).catch(() => undefined);
++    }
++    throw new AppError("CONFLICT", "User already invited", 409);
++  }
++
++  const { raw, hash } = generateInviteToken();
++  const inviteExpiresAt = new Date(Date.now() + env.INVITE_TTL_SEC * 1000);
++
++  const membership = existing
++    ? await prisma.membership.update({
++        where: { id: existing.id },
++        data: {
++          role: input.role,
++          status: "INVITED",
++          inviteTokenHash: hash,
++          inviteExpiresAt,
++        },
++      })
++    : await prisma.membership.create({
++        data: {
++          userId: user.id,
++          organizationId: input.organizationId,
++          role: input.role,
++          status: "INVITED",
++          inviteTokenHash: hash,
++          inviteExpiresAt,
++        },
++      });
++
++  return {
++    inviteToken: raw,
++    membership: {
++      id: membership.id,
++      role: membership.role,
++      status: membership.status,
++      email,
++      inviteExpiresAt: membership.inviteExpiresAt,
++    },
++  };
++}
++
++export async function acceptInvite(input: {
++  token: string;
++  password?: string;
++  name?: string;
++  actorUserId?: string;
++}) {
++  const hash = sha256(input.token);
++  const membership = await prisma.membership.findFirst({
++    where: { inviteTokenHash: hash, status: "INVITED" },
++    include: { user: true },
++  });
++  if (!membership) {
++    throw new AppError("NOT_FOUND", "Invite not found", 404);
++  }
++  if (membership.inviteExpiresAt && membership.inviteExpiresAt < new Date()) {
++    throw new AppError("FORBIDDEN", "Invite expired", 403);
++  }
++
++  if (input.actorUserId) {
++    if (input.actorUserId !== membership.userId) {
++      throw new AppError(
++        "FORBIDDEN",
++        "Authenticated user does not match invite email",
++        403
++      );
++    }
++  } else if (input.password && input.name) {
++    const otherActive = await prisma.membership.findFirst({
++      where: {
++        userId: membership.userId,
++        status: "ACTIVE",
++        id: { not: membership.id },
++      },
++    });
++    if (otherActive) {
++      throw new AppError(
++        "UNAUTHORIZED",
++        "Authentication required to accept invite",
++        401
++      );
++    }
++    await prisma.user.update({
++      where: { id: membership.userId },
++      data: {
++        passwordHash: await hashPassword(input.password),
++        name: input.name,
++      },
++    });
++  } else {
++    throw new AppError(
++      "UNAUTHORIZED",
++      "Authentication or password and name required to accept invite",
++      401
++    );
++  }
++
++  const updated = await prisma.membership.update({
++    where: { id: membership.id },
++    data: {
++      status: "ACTIVE",
++      inviteTokenHash: null,
++      inviteExpiresAt: null,
++    },
++    include: { user: true, organization: true },
++  });
++
++  return {
++    membership: {
++      id: updated.id,
++      role: updated.role,
++      status: updated.status,
++      organizationId: updated.organizationId,
++    },
++    user: {
++      id: updated.user.id,
++      email: updated.user.email,
++      name: updated.user.name,
++    },
++  };
++}
+diff --git a/tests/orgs/invites.test.ts b/tests/orgs/invites.test.ts
+new file mode 100644
+index 0000000..22dde4c
+--- /dev/null
++++ b/tests/orgs/invites.test.ts
+@@ -0,0 +1,235 @@
++import { describe, it, expect, beforeAll, afterAll } from "vitest";
++import request from "supertest";
++import { prisma } from "../../src/lib/prisma.js";
++import { hashPassword } from "../../src/lib/password.js";
++import { signAccessToken } from "../../src/lib/tokens.js";
++import { createApp } from "../../src/app.js";
++import {
++  acceptInvite,
++  createInvite,
++  getCurrent,
++  listMembers,
++  patchCurrent,
++} from "../../src/modules/orgs/orgs.service.js";
++import { redis } from "../../src/lib/redis.js";
++
++describe("orgs invites", () => {
++  const suffix = Date.now();
++  const ownerEmail = `org_owner_${suffix}@test.com`;
++  const inviteEmail = `va_${suffix}@test.com`;
++  const existingInviteeEmail = `existing_${suffix}@test.com`;
++  const roomyOwnerEmail = `roomy_owner_${suffix}@test.com`;
++
++  let limitedOrgId = "";
++  let limitedOwnerId = "";
++  let roomyOrgId = "";
++  let roomyOwnerId = "";
++  let planId = "";
++  const app = createApp();
++
++  beforeAll(async () => {
++    const free = await prisma.plan.findUniqueOrThrow({ where: { code: "free" } });
++    planId = free.id;
++
++    const owner = await prisma.user.create({
++      data: {
++        email: ownerEmail,
++        passwordHash: await hashPassword("Secret123!"),
++        name: "Owner",
++      },
++    });
++    limitedOwnerId = owner.id;
++
++    const limitedOrg = await prisma.organization.create({
++      data: {
++        name: "Seat Limited Org",
++        slug: `seat-limited-${suffix}`,
++        planId,
++        seatLimit: 1,
++        shopLimit: 0,
++        dailyInviteQuota: 0,
++      },
++    });
++    limitedOrgId = limitedOrg.id;
++
++    await prisma.membership.create({
++      data: {
++        userId: owner.id,
++        organizationId: limitedOrg.id,
++        role: "OWNER",
++        status: "ACTIVE",
++      },
++    });
++
++    const roomyOwner = await prisma.user.create({
++      data: {
++        email: roomyOwnerEmail,
++        passwordHash: await hashPassword("Secret123!"),
++        name: "Roomy Owner",
++      },
++    });
++    roomyOwnerId = roomyOwner.id;
++
++    const roomyOrg = await prisma.organization.create({
++      data: {
++        name: "Roomy Org",
++        slug: `roomy-${suffix}`,
++        planId,
++        seatLimit: 5,
++        shopLimit: 0,
++        dailyInviteQuota: 10,
++      },
++    });
++    roomyOrgId = roomyOrg.id;
++
++    await prisma.membership.create({
++      data: {
++        userId: roomyOwner.id,
++        organizationId: roomyOrg.id,
++        role: "OWNER",
++        status: "ACTIVE",
++      },
++    });
++  }, 60000);
++
++  afterAll(async () => {
++    try {
++      const emails = [
++        ownerEmail,
++        inviteEmail,
++        existingInviteeEmail,
++        roomyOwnerEmail,
++      ];
++      const users = await prisma.user.findMany({
++        where: { email: { in: emails } },
++      });
++      // Also clean stub users created under invite email variants
++      const orgIds = [limitedOrgId, roomyOrgId].filter(Boolean);
++      if (orgIds.length) {
++        const memberships = await prisma.membership.findMany({
++          where: { organizationId: { in: orgIds } },
++        });
++        const memberUserIds = memberships.map((m) => m.userId);
++        await prisma.membership.deleteMany({
++          where: { organizationId: { in: orgIds } },
++        });
++        const allUserIds = [
++          ...new Set([...users.map((u) => u.id), ...memberUserIds]),
++        ];
++        if (allUserIds.length) {
++          await prisma.refreshToken.deleteMany({
++            where: { userId: { in: allUserIds } },
++          });
++          await prisma.user.deleteMany({ where: { id: { in: allUserIds } } });
++        }
++        await prisma.organization.deleteMany({ where: { id: { in: orgIds } } });
++      }
++    } finally {
++      await prisma.$disconnect();
++      if (redis.status === "ready") await redis.quit();
++    }
++  });
++
++  it("inviting beyond seatLimit throws PLAN_LIMIT", async () => {
++    await expect(
++      createInvite({
++        organizationId: limitedOrgId,
++        actorUserId: limitedOwnerId,
++        email: inviteEmail,
++        role: "MEMBER",
++      })
++    ).rejects.toMatchObject({ code: "PLAN_LIMIT" });
++  }, 60000);
++
++  it("creates invite and accepts for new user with password+name", async () => {
++    const created = await createInvite({
++      organizationId: roomyOrgId,
++      actorUserId: roomyOwnerId,
++      email: inviteEmail,
++      role: "MEMBER",
++    });
++    expect(created.inviteToken).toBeTruthy();
++    expect(created.membership.status).toBe("INVITED");
++
++    const accepted = await acceptInvite({
++      token: created.inviteToken,
++      password: "Welcome123!",
++      name: "VA User",
++    });
++    expect(accepted.membership.status).toBe("ACTIVE");
++    expect(accepted.user.name).toBe("VA User");
++    expect(accepted.user.email).toBe(inviteEmail);
++  }, 60000);
++
++  it("accepts invite when existing user is authenticated as that email", async () => {
++    const invitee = await prisma.user.create({
++      data: {
++        email: existingInviteeEmail,
++        passwordHash: await hashPassword("Secret123!"),
++        name: "Existing",
++      },
++    });
++
++    const created = await createInvite({
++      organizationId: roomyOrgId,
++      actorUserId: roomyOwnerId,
++      email: existingInviteeEmail,
++      role: "ADMIN",
++    });
++
++    const accepted = await acceptInvite({
++      token: created.inviteToken,
++      actorUserId: invitee.id,
++    });
++    expect(accepted.membership.status).toBe("ACTIVE");
++    expect(accepted.membership.role).toBe("ADMIN");
++  }, 60000);
++
++  it("getCurrent / patchCurrent / listMembers work", async () => {
++    const current = await getCurrent(roomyOrgId);
++    expect(current.id).toBe(roomyOrgId);
++    expect(current.plan.code).toBe("free");
++
++    const patched = await patchCurrent(roomyOrgId, { name: "Roomy Renamed" });
++    expect(patched.name).toBe("Roomy Renamed");
++
++    const members = await listMembers(roomyOrgId);
++    expect(members.length).toBeGreaterThanOrEqual(2);
++    expect(members.some((m) => m.role === "OWNER")).toBe(true);
++  }, 60000);
++
++  it("HTTP: invite requires OWNER/ADMIN and returns raw token", async () => {
++    const accessToken = await signAccessToken({
++      sub: roomyOwnerId,
++      orgId: roomyOrgId,
++      role: "OWNER",
++    });
++
++    const email = `http_invite_${suffix}@test.com`;
++    const res = await request(app)
++      .post("/api/v1/orgs/current/invites")
++      .set("Authorization", `Bearer ${accessToken}`)
++      .send({ email, role: "MEMBER" });
++
++    expect(res.status).toBe(201);
++    expect(res.body.inviteToken).toBeTruthy();
++
++    const acceptRes = await request(app)
++      .post(`/api/v1/orgs/invites/${res.body.inviteToken}/accept`)
++      .send({ password: "Welcome123!", name: "HTTP Invitee" });
++
++    expect(acceptRes.status).toBe(200);
++    expect(acceptRes.body.membership.status).toBe("ACTIVE");
++
++    const membersRes = await request(app)
++      .get("/api/v1/orgs/current/members")
++      .set("Authorization", `Bearer ${accessToken}`);
++
++    expect(membersRes.status).toBe(200);
++    expect(
++      membersRes.body.members.some(
++        (m: { user: { email: string } }) => m.user.email === email
++      )
++    ).toBe(true);
++  }, 60000);
++});
+
