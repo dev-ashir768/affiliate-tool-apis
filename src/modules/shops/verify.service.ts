@@ -9,6 +9,12 @@ function verifyModeFromEnv(): "STUB" | "PLAYWRIGHT" {
   return env.SHOP_VERIFY_MODE === "playwright" ? "PLAYWRIGHT" : "STUB";
 }
 
+/** Test skip unless FORCE_SHOP_VERIFY_ENQUEUE=1 (for enqueue-failure unit tests). */
+function shouldEnqueue(): boolean {
+  if (env.NODE_ENV !== "test") return true;
+  return process.env.FORCE_SHOP_VERIFY_ENQUEUE === "1";
+}
+
 export async function requestVerify(organizationId: string, shopId: string) {
   const shop = await prisma.shop.findFirst({
     where: { id: shopId, organizationId },
@@ -33,11 +39,6 @@ export async function requestVerify(organizationId: string, shopId: string) {
     },
   });
 
-  await prisma.shop.update({
-    where: { id: shop.id },
-    data: { status: "VERIFYING", statusReason: null },
-  });
-
   const jobData: ShopVerifyJobData = {
     shopId: shop.id,
     organizationId,
@@ -45,27 +46,45 @@ export async function requestVerify(organizationId: string, shopId: string) {
     verificationJobId: verificationJob.id,
   };
 
-  // Skip BullMQ in test — Redis is often unreachable (ETIMEDOUT); processor is unit-tested directly.
-  if (env.NODE_ENV !== "test") {
-    try {
-      const bullJob = await shopVerifyQueue.add("verify", jobData, {
-        attempts: 3,
-        backoff: { type: "exponential", delay: 2000 },
-      });
-      await prisma.shopVerificationJob.update({
-        where: { id: verificationJob.id },
-        data: { bullJobId: String(bullJob.id) },
-      });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "enqueue failed";
-      logger.error("shop-verify enqueue failed", {
-        shopId: shop.id,
-        verificationJobId: verificationJob.id,
-        err: message,
-      });
-      // Job row remains QUEUED; caller/worker can still process when Redis recovers.
-    }
+  // Intentional test skip — leave PENDING_INVITE; processShopVerify sets VERIFYING.
+  if (!shouldEnqueue()) {
+    return {
+      verificationJobId: verificationJob.id,
+      status: "PENDING_INVITE" as const,
+    };
   }
+
+  try {
+    const bullJob = await shopVerifyQueue.add("verify", jobData, {
+      attempts: 3,
+      backoff: { type: "exponential", delay: 2000 },
+    });
+    await prisma.shopVerificationJob.update({
+      where: { id: verificationJob.id },
+      data: { bullJobId: String(bullJob.id) },
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "enqueue failed";
+    logger.error("shop-verify enqueue failed", {
+      shopId: shop.id,
+      verificationJobId: verificationJob.id,
+      err: message,
+    });
+    await prisma.shop.update({
+      where: { id: shop.id },
+      data: { status: "FAILED", statusReason: message },
+    });
+    await prisma.shopVerificationJob.update({
+      where: { id: verificationJob.id },
+      data: { status: "FAILED", lastError: message },
+    });
+    throw new AppError("INTERNAL", `Failed to enqueue shop verify: ${message}`, 503);
+  }
+
+  await prisma.shop.update({
+    where: { id: shop.id },
+    data: { status: "VERIFYING", statusReason: null },
+  });
 
   return {
     verificationJobId: verificationJob.id,

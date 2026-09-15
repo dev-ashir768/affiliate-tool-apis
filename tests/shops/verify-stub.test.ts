@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import type { Job } from "bullmq";
 import request from "supertest";
 import { prisma } from "../../src/lib/prisma.js";
@@ -12,6 +12,7 @@ import {
   type ShopVerifyJobData,
 } from "../../src/workers/shop-verify.processor.js";
 import { runPlaywrightVerify } from "../../src/workers/shop-verify.playwright.scaffold.js";
+import { shopVerifyQueue } from "../../src/lib/queue.js";
 import { redis } from "../../src/lib/redis.js";
 
 function fakeJob(data: ShopVerifyJobData, id = "test-job"): Job<ShopVerifyJobData> {
@@ -166,22 +167,61 @@ describe("shop verify stub", () => {
     });
   }, 60000);
 
-  it("requestVerify creates job and returns VERIFYING", async () => {
+  it("requestVerify creates job; test skip leaves PENDING_INVITE", async () => {
     const shop = await connectShop({ organizationId: orgId, region: "US" });
     createdShopIds.push(shop.id);
 
     const result = await requestVerify(orgId, shop.id);
-    expect(result.status).toBe("VERIFYING");
+    expect(result.status).toBe("PENDING_INVITE");
     expect(result.verificationJobId).toBeTruthy();
 
+    // Enqueue skipped in test — shop stays PENDING_INVITE until processShopVerify.
     const updated = await prisma.shop.findUniqueOrThrow({ where: { id: shop.id } });
-    expect(updated.status).toBe("VERIFYING");
+    expect(updated.status).toBe("PENDING_INVITE");
 
     const jobRow = await prisma.shopVerificationJob.findUniqueOrThrow({
       where: { id: result.verificationJobId },
     });
     expect(jobRow.status).toBe("QUEUED");
     expect(jobRow.mode).toBe("STUB");
+  }, 60000);
+
+  it("enqueue failure marks shop FAILED (not stuck VERIFYING)", async () => {
+    const shop = await connectShop({ organizationId: orgId, region: "UK" });
+    createdShopIds.push(shop.id);
+
+    process.env.FORCE_SHOP_VERIFY_ENQUEUE = "1";
+    const addSpy = vi
+      .spyOn(shopVerifyQueue, "add")
+      .mockRejectedValue(new Error("redis down"));
+
+    try {
+      await expect(requestVerify(orgId, shop.id)).rejects.toMatchObject({
+        code: "INTERNAL",
+      });
+
+      const updated = await prisma.shop.findUniqueOrThrow({ where: { id: shop.id } });
+      expect(updated.status).toBe("FAILED");
+      expect(updated.status).not.toBe("VERIFYING");
+      expect(updated.statusReason).toMatch(/redis down/i);
+
+      const jobRow = await prisma.shopVerificationJob.findFirstOrThrow({
+        where: { shopId: shop.id },
+        orderBy: { createdAt: "desc" },
+      });
+      expect(jobRow.status).toBe("FAILED");
+      expect(jobRow.lastError).toMatch(/redis down/i);
+
+      // Can re-verify after FAILED
+      delete process.env.FORCE_SHOP_VERIFY_ENQUEUE;
+      addSpy.mockRestore();
+      const again = await requestVerify(orgId, shop.id);
+      expect(again.verificationJobId).toBeTruthy();
+      expect(again.status).toBe("PENDING_INVITE");
+    } finally {
+      delete process.env.FORCE_SHOP_VERIFY_ENQUEUE;
+      addSpy.mockRestore();
+    }
   }, 60000);
 
   it("Playwright scaffold throws NOT_IMPLEMENTED", async () => {
@@ -211,7 +251,12 @@ describe("shop verify stub", () => {
       .send();
 
     expect(res.status).toBe(200);
-    expect(res.body.status).toBe("VERIFYING");
     expect(res.body.verificationJobId).toBeTruthy();
+    // Test env skips enqueue; shop stays PENDING_INVITE until worker/processor runs.
+    expect(res.body.status).toBe("PENDING_INVITE");
+    const updated = await prisma.shop.findUniqueOrThrow({
+      where: { id: shop.id },
+    });
+    expect(updated.status).toBe("PENDING_INVITE");
   }, 60000);
 });
