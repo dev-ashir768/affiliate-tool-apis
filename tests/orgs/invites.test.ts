@@ -18,6 +18,7 @@ describe("orgs invites", () => {
   const ownerEmail = `org_owner_${suffix}@test.com`;
   const inviteEmail = `va_${suffix}@test.com`;
   const existingInviteeEmail = `existing_${suffix}@test.com`;
+  const realUserNoAuthEmail = `real_noauth_${suffix}@test.com`;
   const roomyOwnerEmail = `roomy_owner_${suffix}@test.com`;
 
   let limitedOrgId = "";
@@ -98,6 +99,7 @@ describe("orgs invites", () => {
         ownerEmail,
         inviteEmail,
         existingInviteeEmail,
+        realUserNoAuthEmail,
         roomyOwnerEmail,
       ];
       const users = await prisma.user.findMany({
@@ -183,6 +185,49 @@ describe("orgs invites", () => {
     });
     expect(accepted.membership.status).toBe("ACTIVE");
     expect(accepted.membership.role).toBe("ADMIN");
+  }, 60000);
+
+  it("rejects password+name accept for existing real users without auth", async () => {
+    const originalPassword = "OriginalPass1!";
+    const realUser = await prisma.user.create({
+      data: {
+        email: realUserNoAuthEmail,
+        passwordHash: await hashPassword(originalPassword),
+        name: "Real User",
+      },
+    });
+    const originalHash = realUser.passwordHash;
+
+    const created = await createInvite({
+      organizationId: roomyOrgId,
+      actorUserId: roomyOwnerId,
+      email: realUserNoAuthEmail,
+      role: "MEMBER",
+    });
+
+    await expect(
+      acceptInvite({
+        token: created.inviteToken,
+        password: "HackedPass9!",
+        name: "Hacker",
+      })
+    ).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+
+    const unchanged = await prisma.user.findUniqueOrThrow({
+      where: { id: realUser.id },
+    });
+    expect(unchanged.passwordHash).toBe(originalHash);
+    expect(unchanged.name).toBe("Real User");
+
+    const membership = await prisma.membership.findUniqueOrThrow({
+      where: {
+        userId_organizationId: {
+          userId: realUser.id,
+          organizationId: roomyOrgId,
+        },
+      },
+    });
+    expect(membership.status).toBe("INVITED");
   }, 60000);
 
   it("getCurrent / patchCurrent / listMembers work", async () => {

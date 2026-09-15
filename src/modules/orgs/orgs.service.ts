@@ -6,6 +6,8 @@ import { sha256 } from "../../lib/crypto.js";
 import { hashPassword } from "../../lib/password.js";
 import { env } from "../../config/env.js";
 
+const INVITE_STUB_NAME = "Invited";
+
 function generateInviteToken(): { raw: string; hash: string } {
   const raw = randomBytes(32).toString("base64url");
   return { raw, hash: sha256(raw) };
@@ -107,7 +109,7 @@ export async function createInvite(input: {
       data: {
         email,
         passwordHash: await hashPassword(randomBytes(32).toString("base64url")),
-        name: "Invited",
+        name: INVITE_STUB_NAME,
       },
     });
     createdStub = true;
@@ -196,19 +198,12 @@ export async function acceptInvite(input: {
         403
       );
     }
-  } else if (input.password && input.name) {
-    const otherActive = await prisma.membership.findFirst({
-      where: {
-        userId: membership.userId,
-        status: "ACTIVE",
-        id: { not: membership.id },
-      },
-    });
-    if (otherActive) {
+  } else if (membership.user.name === INVITE_STUB_NAME) {
+    if (!input.password || !input.name) {
       throw new AppError(
-        "UNAUTHORIZED",
-        "Authentication required to accept invite",
-        401
+        "VALIDATION_ERROR",
+        "password and name are required for new users",
+        400
       );
     }
     await prisma.user.update({
@@ -221,7 +216,7 @@ export async function acceptInvite(input: {
   } else {
     throw new AppError(
       "UNAUTHORIZED",
-      "Authentication or password and name required to accept invite",
+      "Authentication required to accept invite",
       401
     );
   }
