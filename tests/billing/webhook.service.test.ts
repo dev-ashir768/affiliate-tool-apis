@@ -87,4 +87,53 @@ describe("billing webhook service", () => {
     expect(org.subscription?.stripeSubscriptionId).toBe(subscriptionId);
     expect(org.subscription?.status).toBe("ACTIVE");
   });
+
+  it("rolls back StripeEvent claim when apply fails so Stripe can retry", async () => {
+    const eventId = `evt_test_${suffix}_retry`;
+    const retrySubId = `sub_test_${suffix}_retry`;
+
+    const failingEvent = {
+      id: eventId,
+      type: "customer.subscription.updated",
+      data: {
+        object: {
+          id: retrySubId,
+          status: "active",
+          customer: `cus_unknown_${suffix}`,
+          items: { data: [{ price: { id: priceId } }] },
+          current_period_end: Math.floor(Date.now() / 1000) + 86400,
+        },
+      },
+    };
+
+    await expect(handleStripeEvent(failingEvent as any)).rejects.toMatchObject({
+      code: "NOT_FOUND",
+    });
+
+    expect(
+      await prisma.stripeEvent.count({ where: { eventId } })
+    ).toBe(0);
+
+    const successEvent = {
+      ...failingEvent,
+      data: {
+        object: {
+          ...failingEvent.data.object,
+          customer: customerId,
+        },
+      },
+    };
+
+    await handleStripeEvent(successEvent as any);
+
+    expect(
+      await prisma.stripeEvent.count({ where: { eventId } })
+    ).toBe(1);
+
+    const sub = await prisma.subscription.findUnique({
+      where: { organizationId: orgId },
+    });
+    expect(sub?.stripeSubscriptionId).toBe(retrySubId);
+    expect(sub?.status).toBe("ACTIVE");
+  });
 });

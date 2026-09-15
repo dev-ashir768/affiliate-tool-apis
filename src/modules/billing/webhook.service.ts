@@ -202,9 +202,23 @@ async function applyFromCheckoutSession(object: Record<string, unknown>) {
   });
 }
 
+async function applyClaimedEvent(event: StripeLikeEvent): Promise<void> {
+  const object = event.data?.object ?? {};
+
+  if (event.type === "checkout.session.completed") {
+    await applyFromCheckoutSession(object);
+    return;
+  }
+
+  if (event.type.startsWith("customer.subscription.")) {
+    await applyFromSubscription(object);
+  }
+}
+
 /**
  * Idempotent Stripe event processor.
  * Claims the event id first; duplicates return without re-applying side effects.
+ * If apply fails after claim, the claim row is deleted so Stripe can retry.
  */
 export async function handleStripeEvent(event: StripeLikeEvent): Promise<void> {
   try {
@@ -224,15 +238,11 @@ export async function handleStripeEvent(event: StripeLikeEvent): Promise<void> {
     throw err;
   }
 
-  const object = event.data?.object ?? {};
-
-  if (event.type === "checkout.session.completed") {
-    await applyFromCheckoutSession(object);
-    return;
-  }
-
-  if (event.type.startsWith("customer.subscription.")) {
-    await applyFromSubscription(object);
+  try {
+    await applyClaimedEvent(event);
+  } catch (err) {
+    await prisma.stripeEvent.deleteMany({ where: { eventId: event.id } });
+    throw err;
   }
 }
 
