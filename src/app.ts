@@ -4,6 +4,7 @@ import helmet from "helmet";
 import cookieParser from "cookie-parser";
 import { env } from "./config/env.js";
 import { errorHandler } from "./middleware/error-handler.js";
+import { authRoutes } from "./modules/auth/auth.routes.js";
 
 export function createApp() {
   const app = express();
@@ -18,6 +19,7 @@ export function createApp() {
   app.get("/health", (_req, res) => res.json({ ok: true }));
   // JSON parser for non-webhook routes (billing webhook raw body added in Task 8)
   app.use(express.json());
+  app.use("/api/v1/auth", authRoutes);
   app.use(errorHandler);
   return app;
 }
