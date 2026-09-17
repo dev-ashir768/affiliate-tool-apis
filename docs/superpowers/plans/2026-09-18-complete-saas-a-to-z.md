@@ -30,8 +30,8 @@
 | **4** | Merchant shops UI | ✅ Done |
 | **5** | Backoffice console (staff, orgs, shops, finance) | ✅ Done (proxies/crawler scaffold) |
 | **6** | Hardening (reset, audit, finance, playwright dry-run) | ✅ Done |
-| **Polish** | Auth contrast, Sonner, proxy route-policy, Stripe cancel→free | ✅ Code done (merge to `main` pending) |
-| **7** | Ops completeness (this plan’s active slice) | 🔄 In progress |
+| **Polish** | Auth contrast, Sonner, proxy route-policy, Stripe cancel→free | ✅ Done on `main` |
+| **7** | Ops completeness (proxies, nav admin, email, crawler) | ✅ Done on `main` (crawler on branch → merge) |
 | **8** | Real shop verify (Playwright / bot pipeline) | ⬜ Next |
 | **9** | Growth product (creators, campaigns, outreach) | ⬜ Post-v1 |
 | **10** | Scale & polish (email provider, observability, multi-region) | ⬜ Later |
@@ -73,9 +73,9 @@
 
 ### Task 7.3: Crawler console (job status)
 
-- [ ] API: read BullMQ queue stats + last job; `POST /platform/crawler/run` enqueues noop/dry-run job (SUPERADMIN|OPS)
-- [ ] Portal: status card + “Run dry check” button + toast
-- [ ] Commit: `feat: platform crawler status and dry-run trigger`
+- [x] API: read BullMQ queue stats + last job; `POST /platform/crawler/run` enqueues noop/dry-run job (SUPERADMIN|OPS)
+- [x] Portal: status card + “Run dry check” button + toast
+- [x] Commit: `feat: platform crawler status and dry-run trigger`
 
 ### Task 7.4: Navigation admin (SUPERADMIN)
 

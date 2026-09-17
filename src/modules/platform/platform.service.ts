@@ -10,6 +10,12 @@ import { writeAuditLog } from "../../lib/audit.js";
 import { encryptVault } from "../../lib/crypto.js";
 import { sendStaffWelcomeEmail } from "../../lib/email.js";
 import { logger } from "../../lib/logger.js";
+import {
+  enqueueCrawlerDryRun,
+  getCrawlerStatus,
+} from "./crawler.service.js";
+
+export { getCrawlerStatus as crawlerStatus, enqueueCrawlerDryRun };
 
 export type ListParams = {
   page: number;
@@ -641,16 +647,6 @@ export async function patchProxy(
   };
 }
 
-export async function crawlerStatus() {
-  // Phase 7: surface queue health; dry-run enqueue lands in Task 7.3
-  return {
-    status: "IDLE" as const,
-    lastRunAt: null as string | null,
-    queue: "shop-verify",
-    note: "Crawler listens on the shop-verify worker queue. Use shop verify from merchant shops; dedicated crawl runs come next.",
-  };
-}
-
 /** @deprecated use listProxies */
 export async function listProxiesScaffold() {
   const result = await listProxies({ page: 1, pageSize: 100 });
@@ -669,5 +665,5 @@ export async function listProxiesScaffold() {
 
 /** @deprecated use crawlerStatus */
 export async function crawlerStatusScaffold() {
-  return crawlerStatus();
+  return getCrawlerStatus();
 }

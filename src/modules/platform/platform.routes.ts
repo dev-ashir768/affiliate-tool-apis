@@ -20,6 +20,7 @@ import {
   createProxy,
   createStaff,
   crawlerStatus,
+  enqueueCrawlerDryRun,
   getOrganization,
   listOrganizations,
   listPlatformShops,
@@ -185,6 +186,19 @@ platformRoutes.get(
   async (_req, res, next) => {
     try {
       res.json(await crawlerStatus());
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+platformRoutes.post(
+  "/crawler/run",
+  requirePlatform("SUPERADMIN", "OPS"),
+  async (req, res, next) => {
+    try {
+      const result = await enqueueCrawlerDryRun(req.auth?.sub);
+      res.status(202).json(result);
     } catch (err) {
       next(err);
     }
