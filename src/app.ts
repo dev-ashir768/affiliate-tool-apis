@@ -11,6 +11,7 @@ import {
   billingWebhookHandler,
 } from "./modules/billing/billing.routes.js";
 import { shopsRoutes } from "./modules/shops/shops.routes.js";
+import { navigationRoutes } from "./modules/navigation/navigation.routes.js";
 
 export function createApp() {
   const app = express();
@@ -36,6 +37,7 @@ export function createApp() {
   app.use("/api/v1/orgs", orgsRoutes);
   app.use("/api/v1/billing", billingRoutes);
   app.use("/api/v1/shops", shopsRoutes);
+  app.use("/api/v1/navigation", navigationRoutes);
   app.use(errorHandler);
   return app;
 }
