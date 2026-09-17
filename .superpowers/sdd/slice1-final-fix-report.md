@@ -13,7 +13,7 @@
 | Repo | Commit | Summary |
 |------|--------|---------|
 | `affiliate-tool-portal` | `9e23d4a` | Proxy guards + safe `next=` + staff topbar subtitle |
-| `affiliate-tool-apis` | _(this commit)_ | Claims skip, seed non-clobber, `PLATFORM_SUPERADMIN_PASSWORD_HASH` docs |
+| `affiliate-tool-apis` | `b5e65ce` | Claims skip, seed non-clobber, `PLATFORM_SUPERADMIN_PASSWORD_HASH` docs |
 
 ## What was fixed
 
