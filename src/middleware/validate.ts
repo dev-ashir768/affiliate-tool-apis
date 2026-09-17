@@ -11,3 +11,14 @@ export function validateBody(schema: ZodTypeAny): RequestHandler {
     }
   };
 }
+
+export function validateQuery(schema: ZodTypeAny): RequestHandler {
+  return (req, _res, next) => {
+    try {
+      req.query = schema.parse(req.query ?? {}) as typeof req.query;
+      next();
+    } catch (err) {
+      next(err);
+    }
+  };
+}
