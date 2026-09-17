@@ -50,12 +50,18 @@ Never commit vault keys, IMAP passwords, or Stripe secrets.
 - `EMAIL_PROVIDER=console` (dev logs) or `smtp` with SMTP_* 
 - Templates: password reset, org invite, staff welcome
 
-## Growth product (Phase 9 slice 1)
+## Growth product (Phase 9)
 
-- Creators CRM: `/creators` → `GET/POST /api/v1/creators`
-- Lists: `/api/v1/creators/lists`
+- Creators CRM: `/creators` → `GET/POST /api/v1/creators` (optional `contactEmail`)
+- Lists: `/api/v1/creators/lists` + members
 - Campaigns: `/campaigns` → `/api/v1/creators/campaigns`
+- Outreach: `/outreach` → templates + `POST /api/v1/outreach/send` ({{handle}} tokens)
 - No TikTok crawl/API yet — manual handles only
+
+## Observability
+
+- Optional `SENTRY_DSN` + `npm i @sentry/node` (optionalDependency)
+- CI: `.github/workflows/ci.yml` runs typecheck (+ portal lint)
 
 ## Health
 

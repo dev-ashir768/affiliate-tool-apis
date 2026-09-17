@@ -3,6 +3,13 @@ import { z } from "zod";
 export const createCreatorSchema = z.object({
   handle: z.string().trim().min(1).max(100),
   displayName: z.string().trim().max(200).optional().nullable(),
+  contactEmail: z
+    .string()
+    .trim()
+    .email()
+    .optional()
+    .nullable()
+    .or(z.literal("")),
   region: z.enum(["US", "UK"]).optional().nullable(),
   followerCount: z.number().int().nonnegative().optional().nullable(),
   notes: z.string().trim().max(5000).optional().nullable(),

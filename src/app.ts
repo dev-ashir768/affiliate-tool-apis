@@ -12,6 +12,7 @@ import {
 } from "./modules/billing/billing.routes.js";
 import { shopsRoutes } from "./modules/shops/shops.routes.js";
 import { creatorsRoutes } from "./modules/creators/creators.routes.js";
+import { outreachRoutes } from "./modules/outreach/outreach.routes.js";
 import { navigationRoutes } from "./modules/navigation/navigation.routes.js";
 import { platformRoutes } from "./modules/platform/platform.routes.js";
 
@@ -40,6 +41,7 @@ export function createApp() {
   app.use("/api/v1/billing", billingRoutes);
   app.use("/api/v1/shops", shopsRoutes);
   app.use("/api/v1/creators", creatorsRoutes);
+  app.use("/api/v1/outreach", outreachRoutes);
   app.use("/api/v1/navigation", navigationRoutes);
   app.use("/api/v1/platform", platformRoutes);
   app.use(errorHandler);

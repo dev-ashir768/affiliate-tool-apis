@@ -7,6 +7,7 @@ function toCreator(row: {
   platform: string;
   handle: string;
   displayName: string | null;
+  contactEmail: string | null;
   region: string | null;
   followerCount: number | null;
   notes: string | null;
@@ -19,6 +20,7 @@ function toCreator(row: {
     platform: row.platform,
     handle: row.handle,
     displayName: row.displayName,
+    contactEmail: row.contactEmail,
     region: row.region,
     followerCount: row.followerCount,
     notes: row.notes,
@@ -41,6 +43,7 @@ export async function createCreator(
   input: {
     handle: string;
     displayName?: string | null;
+    contactEmail?: string | null;
     region?: "US" | "UK" | null;
     followerCount?: number | null;
     notes?: string | null;
@@ -54,6 +57,7 @@ export async function createCreator(
         organizationId,
         handle,
         displayName: input.displayName ?? null,
+        contactEmail: input.contactEmail?.trim() || null,
         region: input.region ?? null,
         followerCount: input.followerCount ?? null,
         notes: input.notes ?? null,
@@ -80,6 +84,7 @@ export async function patchCreator(
   input: Partial<{
     handle: string;
     displayName: string | null;
+    contactEmail: string | null;
     region: "US" | "UK" | null;
     followerCount: number | null;
     notes: string | null;
@@ -96,6 +101,7 @@ export async function patchCreator(
     data.handle = input.handle.replace(/^@/, "").trim();
   }
   if (input.displayName !== undefined) data.displayName = input.displayName;
+  if (input.contactEmail !== undefined) data.contactEmail = input.contactEmail;
   if (input.region !== undefined) data.region = input.region;
   if (input.followerCount !== undefined) data.followerCount = input.followerCount;
   if (input.notes !== undefined) data.notes = input.notes;

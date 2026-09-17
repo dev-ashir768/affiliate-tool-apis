@@ -1,6 +1,9 @@
 import { createApp } from "./app.js";
 import { env } from "./config/env.js";
 import { logger } from "./lib/logger.js";
+import { initObservability } from "./lib/observability.js";
+
+await initObservability();
 
 const app = createApp();
 app.listen(env.PORT, () => logger.info("api listening", { port: env.PORT }));

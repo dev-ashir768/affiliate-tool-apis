@@ -170,20 +170,27 @@ async function main() {
       icon: "Megaphone",
       sortOrder: 3,
     },
-    { key: "team", label: "Team", href: "/team", icon: "Users", sortOrder: 4 },
+    {
+      key: "outreach",
+      label: "Outreach",
+      href: "/outreach",
+      icon: "Mail",
+      sortOrder: 4,
+    },
+    { key: "team", label: "Team", href: "/team", icon: "Users", sortOrder: 5 },
     {
       key: "billing",
       label: "Billing",
       href: "/billing",
       icon: "CreditCard",
-      sortOrder: 5,
+      sortOrder: 6,
     },
     {
       key: "settings",
       label: "Settings",
       href: "/settings",
       icon: "Settings",
-      sortOrder: 6,
+      sortOrder: 7,
     },
   ]);
 

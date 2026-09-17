@@ -113,6 +113,13 @@ enum CampaignStatus {
   DONE
 }
 
+enum OutreachStatus {
+  DRAFT
+  QUEUED
+  SENT
+  FAILED
+}
+
 model User {
   id           String         @id @default(cuid())
   email        String         @unique
@@ -160,6 +167,8 @@ model Organization {
   creators         Creator[]
   creatorLists     CreatorList[]
   campaigns        Campaign[]
+  outreachTemplates OutreachTemplate[]
+  outreachMessages  OutreachMessage[]
 }
 
 model Membership {
@@ -348,11 +357,13 @@ model Creator {
   platform       CreatorPlatform @default(TIKTOK)
   handle         String
   displayName    String?
+  contactEmail   String?
   region         ShopRegion?
   followerCount  Int?
   notes          String?
   stage          CreatorStage    @default(LEAD)
   listMembers    CreatorListMember[]
+  outreachMessages OutreachMessage[]
   createdAt      DateTime        @default(now())
   updatedAt      DateTime        @updatedAt
 
@@ -396,9 +407,50 @@ model Campaign {
   brief          String?
   offerNote      String?
   deadline       DateTime?
+  outreachMessages OutreachMessage[]
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
 
   @@index([organizationId])
+  @@index([status])
+}
+
+model OutreachTemplate {
+  id             String            @id @default(cuid())
+  organizationId String
+  organization   Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name           String
+  subject        String
+  bodyText       String
+  messages       OutreachMessage[]
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  @@unique([organizationId, name])
+  @@index([organizationId])
+}
+
+model OutreachMessage {
+  id             String           @id @default(cuid())
+  organizationId String
+  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  templateId     String?
+  template       OutreachTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  campaignId     String?
+  campaign       Campaign?        @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  creatorId      String
+  creator        Creator          @relation(fields: [creatorId], references: [id], onDelete: Cascade)
+  toEmail        String?
+  subject        String
+  bodyText       String
+  status         OutreachStatus   @default(DRAFT)
+  lastError      String?
+  sentAt         DateTime?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  @@index([organizationId])
+  @@index([creatorId])
+  @@index([campaignId])
   @@index([status])
 }
