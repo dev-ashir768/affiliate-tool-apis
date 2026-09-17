@@ -4,19 +4,23 @@ import { validateBody, validateQuery } from "../../middleware/validate.js";
 import { authenticate } from "../../middleware/authenticate.js";
 import { requirePlatform } from "../../middleware/require-platform.js";
 import {
+  createProxySchema,
   createStaffSchema,
   listQuerySchema,
+  patchProxySchema,
   patchStaffSchema,
 } from "./platform.schemas.js";
 import {
   billingOverview,
+  createProxy,
   createStaff,
-  crawlerStatusScaffold,
+  crawlerStatus,
   getOrganization,
   listOrganizations,
   listPlatformShops,
-  listProxiesScaffold,
+  listProxies,
   listStaff,
+  patchProxy,
   patchStaff,
   listAuditLogs,
 } from "./platform.service.js";
@@ -127,9 +131,38 @@ platformRoutes.get(
 platformRoutes.get(
   "/proxies",
   requirePlatform("SUPERADMIN", "OPS"),
-  async (_req, res, next) => {
+  validateQuery(listQuerySchema),
+  async (req, res, next) => {
     try {
-      res.json(await listProxiesScaffold());
+      res.json(await listProxies(req.query as any));
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+platformRoutes.post(
+  "/proxies",
+  requirePlatform("SUPERADMIN", "OPS"),
+  validateBody(createProxySchema),
+  async (req, res, next) => {
+    try {
+      const proxy = await createProxy(req.body);
+      res.status(201).json(proxy);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+platformRoutes.patch(
+  "/proxies/:id",
+  requirePlatform("SUPERADMIN", "OPS"),
+  validateBody(patchProxySchema),
+  async (req, res, next) => {
+    try {
+      const proxy = await patchProxy(String(req.params.id), req.body);
+      res.json(proxy);
     } catch (err) {
       next(err);
     }
@@ -141,7 +174,7 @@ platformRoutes.get(
   requirePlatform("SUPERADMIN", "OPS"),
   async (_req, res, next) => {
     try {
-      res.json(await crawlerStatusScaffold());
+      res.json(await crawlerStatus());
     } catch (err) {
       next(err);
     }

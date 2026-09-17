@@ -81,6 +81,19 @@ enum NavArea {
   BACKOFFICE
 }
 
+enum ProxyStatus {
+  AVAILABLE
+  IN_USE
+  DISABLED
+  BANNED
+}
+
+enum ProxyProtocol {
+  HTTP
+  HTTPS
+  SOCKS5
+}
+
 model User {
   id           String         @id @default(cuid())
   email        String         @unique
@@ -284,4 +297,24 @@ model NavItem {
   updatedAt            DateTime         @updatedAt
 
   @@unique([sectionId, key])
+}
+
+model Proxy {
+  id           String        @id @default(cuid())
+  label        String
+  host         String
+  port         Int
+  protocol     ProxyProtocol @default(HTTP)
+  username     String?
+  /// AES vault ciphertext for proxy password (never return plaintext)
+  passwordEnc  String?
+  region       String?
+  status       ProxyStatus   @default(AVAILABLE)
+  lastCheckedAt DateTime?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  @@index([status])
+  @@index([region])
+  @@unique([host, port, protocol])
 }

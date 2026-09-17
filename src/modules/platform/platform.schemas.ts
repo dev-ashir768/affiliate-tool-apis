@@ -23,3 +23,29 @@ export const listQuerySchema = z.object({
   sortBy: z.string().optional(),
   sortOrder: z.enum(["asc", "desc"]).optional(),
 });
+
+export const createProxySchema = z.object({
+  label: z.string().trim().min(1).max(120),
+  host: z.string().trim().min(1).max(255),
+  port: z.coerce.number().int().min(1).max(65535),
+  protocol: z.enum(["HTTP", "HTTPS", "SOCKS5"]).default("HTTP"),
+  username: z.string().trim().max(120).optional().nullable(),
+  password: z.string().max(256).optional().nullable(),
+  region: z.string().trim().max(32).optional().nullable(),
+  status: z.enum(["AVAILABLE", "IN_USE", "DISABLED", "BANNED"]).optional(),
+});
+
+export const patchProxySchema = z
+  .object({
+    label: z.string().trim().min(1).max(120).optional(),
+    host: z.string().trim().min(1).max(255).optional(),
+    port: z.coerce.number().int().min(1).max(65535).optional(),
+    protocol: z.enum(["HTTP", "HTTPS", "SOCKS5"]).optional(),
+    username: z.string().trim().max(120).optional().nullable(),
+    password: z.string().max(256).optional().nullable(),
+    region: z.string().trim().max(32).optional().nullable(),
+    status: z.enum(["AVAILABLE", "IN_USE", "DISABLED", "BANNED"]).optional(),
+  })
+  .refine((b) => Object.keys(b).length > 0, {
+    message: "At least one field is required",
+  });

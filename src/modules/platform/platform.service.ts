@@ -7,6 +7,7 @@ import { prisma } from "../../lib/prisma.js";
 import { AppError } from "../../lib/errors.js";
 import { hashPassword } from "../../lib/password.js";
 import { writeAuditLog } from "../../lib/audit.js";
+import { encryptVault } from "../../lib/crypto.js";
 
 export type ListParams = {
   page: number;
@@ -481,17 +482,168 @@ export async function listAuditLogs(params: ListParams) {
   };
 }
 
-export async function listProxiesScaffold() {
+export async function listProxies(params: {
+  page: number;
+  pageSize: number;
+  search?: string;
+}) {
+  const where = params.search
+    ? {
+        OR: [
+          { label: { contains: params.search, mode: "insensitive" as const } },
+          { host: { contains: params.search, mode: "insensitive" as const } },
+          { region: { contains: params.search, mode: "insensitive" as const } },
+        ],
+      }
+    : {};
+
+  const [total, rows] = await Promise.all([
+    prisma.proxy.count({ where }),
+    prisma.proxy.findMany({
+      where,
+      orderBy: { createdAt: "desc" },
+      skip: (params.page - 1) * params.pageSize,
+      take: params.pageSize,
+    }),
+  ]);
+
   return {
-    items: [] as Array<{ id: string; label: string; status: string }>,
-    meta: { total: 0, note: "Proxy management scaffolding — coming later" },
+    data: rows.map((p) => ({
+      id: p.id,
+      label: p.label,
+      host: p.host,
+      port: p.port,
+      protocol: p.protocol,
+      username: p.username,
+      hasPassword: Boolean(p.passwordEnc),
+      region: p.region,
+      status: p.status,
+      lastCheckedAt: p.lastCheckedAt,
+      createdAt: p.createdAt,
+      updatedAt: p.updatedAt,
+    })),
+    meta: { total, page: params.page, pageSize: params.pageSize },
   };
 }
 
-export async function crawlerStatusScaffold() {
+export async function createProxy(input: {
+  label: string;
+  host: string;
+  port: number;
+  protocol: "HTTP" | "HTTPS" | "SOCKS5";
+  username?: string | null;
+  password?: string | null;
+  region?: string | null;
+  status?: "AVAILABLE" | "IN_USE" | "DISABLED" | "BANNED";
+}) {
+  const row = await prisma.proxy.create({
+    data: {
+      label: input.label,
+      host: input.host,
+      port: input.port,
+      protocol: input.protocol,
+      username: input.username ?? null,
+      passwordEnc: input.password ? encryptVault(input.password) : null,
+      region: input.region ?? null,
+      status: input.status ?? "AVAILABLE",
+    },
+  });
+
+  return {
+    id: row.id,
+    label: row.label,
+    host: row.host,
+    port: row.port,
+    protocol: row.protocol,
+    username: row.username,
+    hasPassword: Boolean(row.passwordEnc),
+    region: row.region,
+    status: row.status,
+    lastCheckedAt: row.lastCheckedAt,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
+export async function patchProxy(
+  id: string,
+  input: {
+    label?: string;
+    host?: string;
+    port?: number;
+    protocol?: "HTTP" | "HTTPS" | "SOCKS5";
+    username?: string | null;
+    password?: string | null;
+    region?: string | null;
+    status?: "AVAILABLE" | "IN_USE" | "DISABLED" | "BANNED";
+  }
+) {
+  const existing = await prisma.proxy.findUnique({ where: { id } });
+  if (!existing) {
+    throw new AppError("NOT_FOUND", "Proxy not found", 404);
+  }
+
+  const row = await prisma.proxy.update({
+    where: { id },
+    data: {
+      ...(input.label !== undefined ? { label: input.label } : {}),
+      ...(input.host !== undefined ? { host: input.host } : {}),
+      ...(input.port !== undefined ? { port: input.port } : {}),
+      ...(input.protocol !== undefined ? { protocol: input.protocol } : {}),
+      ...(input.username !== undefined ? { username: input.username } : {}),
+      ...(input.password !== undefined
+        ? {
+            passwordEnc: input.password ? encryptVault(input.password) : null,
+          }
+        : {}),
+      ...(input.region !== undefined ? { region: input.region } : {}),
+      ...(input.status !== undefined ? { status: input.status } : {}),
+    },
+  });
+
+  return {
+    id: row.id,
+    label: row.label,
+    host: row.host,
+    port: row.port,
+    protocol: row.protocol,
+    username: row.username,
+    hasPassword: Boolean(row.passwordEnc),
+    region: row.region,
+    status: row.status,
+    lastCheckedAt: row.lastCheckedAt,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
+export async function crawlerStatus() {
+  // Phase 7: surface queue health; dry-run enqueue lands in Task 7.3
   return {
     status: "IDLE" as const,
     lastRunAt: null as string | null,
-    note: "Crawler console scaffolding — coming later",
+    queue: "shop-verify",
+    note: "Crawler listens on the shop-verify worker queue. Use shop verify from merchant shops; dedicated crawl runs come next.",
   };
+}
+
+/** @deprecated use listProxies */
+export async function listProxiesScaffold() {
+  const result = await listProxies({ page: 1, pageSize: 100 });
+  return {
+    items: result.data.map((p) => ({
+      id: p.id,
+      label: p.label,
+      status: p.status,
+    })),
+    meta: {
+      total: result.meta.total,
+      note: "Proxy pool is live — manage via platform proxies API",
+    },
+  };
+}
+
+/** @deprecated use crawlerStatus */
+export async function crawlerStatusScaffold() {
+  return crawlerStatus();
 }
