@@ -19,6 +19,12 @@ const schema = z.object({
   STRIPE_SECRET_KEY: z.string().optional(),
   STRIPE_WEBHOOK_SECRET: z.string().optional(),
   SHOP_VERIFY_MODE: z.enum(["stub", "playwright"]).default("stub"),
+  /** When true (default), PLAYWRIGHT mode activates without real browser. */
+  PLAYWRIGHT_SHOP_VERIFY_DRY_RUN: z
+    .enum(["true", "false", "1", "0"])
+    .default("true")
+    .transform((v) => v === "true" || v === "1"),
+  PASSWORD_RESET_TTL_SEC: z.coerce.number().default(3600),
   INVITE_TTL_SEC: z.coerce.number().default(604800),
   PLATFORM_SUPERADMIN_EMAIL: z.string().email().optional(),
   PLATFORM_SUPERADMIN_PASSWORD: z.string().min(8).optional(),

@@ -18,6 +18,7 @@ import {
   listProxiesScaffold,
   listStaff,
   patchStaff,
+  listAuditLogs,
 } from "./platform.service.js";
 
 export const platformRoutes = Router();
@@ -141,6 +142,19 @@ platformRoutes.get(
   async (_req, res, next) => {
     try {
       res.json(await crawlerStatusScaffold());
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+platformRoutes.get(
+  "/audit",
+  requirePlatform("SUPERADMIN"),
+  validateQuery(listQuerySchema),
+  async (req, res, next) => {
+    try {
+      res.json(await listAuditLogs(req.query as any));
     } catch (err) {
       next(err);
     }

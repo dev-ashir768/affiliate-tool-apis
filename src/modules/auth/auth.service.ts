@@ -1,4 +1,5 @@
 import type { MembershipRole, PlatformRole, PlatformMembershipStatus } from "@prisma/client";
+import { randomBytes } from "node:crypto";
 import { prisma } from "../../lib/prisma.js";
 import { AppError } from "../../lib/errors.js";
 import { hashPassword, verifyPassword } from "../../lib/password.js";
@@ -8,6 +9,9 @@ import {
   type AccessClaims,
 } from "../../lib/tokens.js";
 import { sha256 } from "../../lib/crypto.js";
+import { env } from "../../config/env.js";
+import { logger } from "../../lib/logger.js";
+import { writeAuditLog } from "../../lib/audit.js";
 import {
   mirrorRefresh,
   revokeRefreshMirror,
@@ -18,6 +22,11 @@ import {
   cleanupExpiredInviteStub,
   isExpiredInviteStub,
 } from "../orgs/orgs.service.js";
+
+function portalOrigin(): string {
+  const origin = env.CORS_ORIGINS.split(",")[0]?.trim() || "http://localhost:3000";
+  return origin.replace(/\/$/, "");
+}
 
 function slugify(name: string) {
   return (
@@ -250,4 +259,82 @@ export async function getMe(userId: string, orgId: string | null) {
     })),
     redirectTo: redirectFor(platformMembership?.role ?? null),
   };
+}
+
+export async function requestPasswordReset(input: { email: string }) {
+  const email = input.email.trim().toLowerCase();
+  const user = await prisma.user.findUnique({ where: { email } });
+
+  // Always succeed to avoid email enumeration
+  if (!user || user.status !== "ACTIVE") {
+    return { ok: true as const };
+  }
+
+  const raw = randomBytes(32).toString("base64url");
+  const tokenHash = sha256(raw);
+  const expiresAt = new Date(Date.now() + env.PASSWORD_RESET_TTL_SEC * 1000);
+
+  await prisma.passwordResetToken.create({
+    data: { userId: user.id, tokenHash, expiresAt },
+  });
+
+  const resetUrl = `${portalOrigin()}/reset-password?token=${raw}`;
+
+  logger.info("password reset requested", {
+    userId: user.id,
+    email: user.email,
+    resetUrl,
+  });
+
+  await writeAuditLog({
+    actorUserId: user.id,
+    action: "auth.password_reset_requested",
+    entityType: "User",
+    entityId: user.id,
+  });
+
+  return {
+    ok: true as const,
+    /** Dev/test only — never rely on this in production clients */
+    ...(env.NODE_ENV !== "production" ? { resetUrl, token: raw } : {}),
+  };
+}
+
+export async function resetPassword(input: { token: string; password: string }) {
+  const tokenHash = sha256(input.token);
+  const row = await prisma.passwordResetToken.findUnique({
+    where: { tokenHash },
+  });
+  if (!row || row.usedAt || row.expiresAt < new Date()) {
+    throw new AppError("VALIDATION_ERROR", "Invalid or expired reset token", 400);
+  }
+
+  const passwordHash = await hashPassword(input.password);
+  await prisma.$transaction(async (tx) => {
+    await tx.user.update({
+      where: { id: row.userId },
+      data: { passwordHash },
+    });
+    await tx.passwordResetToken.update({
+      where: { id: row.id },
+      data: { usedAt: new Date() },
+    });
+    await tx.passwordResetToken.updateMany({
+      where: { userId: row.userId, usedAt: null, id: { not: row.id } },
+      data: { usedAt: new Date() },
+    });
+    await tx.refreshToken.updateMany({
+      where: { userId: row.userId, revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
+  });
+
+  await writeAuditLog({
+    actorUserId: row.userId,
+    action: "auth.password_reset_completed",
+    entityType: "User",
+    entityId: row.userId,
+  });
+
+  return { ok: true as const };
 }

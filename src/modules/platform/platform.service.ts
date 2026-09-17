@@ -6,6 +6,7 @@ import type {
 import { prisma } from "../../lib/prisma.js";
 import { AppError } from "../../lib/errors.js";
 import { hashPassword } from "../../lib/password.js";
+import { writeAuditLog } from "../../lib/audit.js";
 
 export type ListParams = {
   page: number;
@@ -109,6 +110,12 @@ export async function createStaff(input: {
       },
       include: { user: true },
     });
+    await writeAuditLog({
+      action: "platform.staff_created",
+      entityType: "PlatformMembership",
+      entityId: membership.id,
+      meta: { email, role: input.role, existingUser: true },
+    });
     return toStaff(membership);
   }
 
@@ -130,6 +137,12 @@ export async function createStaff(input: {
       },
       include: { user: true },
     });
+  });
+  await writeAuditLog({
+    action: "platform.staff_created",
+    entityType: "PlatformMembership",
+    entityId: membership.id,
+    meta: { email, role: input.role },
   });
   return toStaff(membership);
 }
@@ -173,6 +186,13 @@ export async function patchStaff(
       ...(input.status ? { status: input.status } : {}),
     },
     include: { user: true },
+  });
+  await writeAuditLog({
+    actorUserId: actorUserId,
+    action: "platform.staff_patched",
+    entityType: "PlatformMembership",
+    entityId: membershipId,
+    meta: { ...input },
   });
   return toStaff(updated);
 }
@@ -379,13 +399,85 @@ export async function billingOverview() {
     .filter((o) => o.subscription && o.plan.code !== "free")
     .reduce((sum, o) => sum + o.plan.monthlyPriceCents, 0);
 
+  const paidOrganizationCount = paidOrgs.filter(
+    (o) => o.plan.code !== "free"
+  ).length;
+  const freeOrganizationCount = await prisma.organization.count({
+    where: { plan: { code: "free" } },
+  });
+  const activeSubscriptionCount =
+    bySubStatus.find((r) => r.status === "ACTIVE")?._count._all ?? 0;
+  const pastDueCount =
+    bySubStatus.find((r) => r.status === "PAST_DUE")?._count._all ?? 0;
+  const trialingCount =
+    bySubStatus.find((r) => r.status === "TRIALING")?._count._all ?? 0;
+
+  const revenueByPlan = plans
+    .filter((p) => p.code !== "free")
+    .map((plan) => {
+      const count = byPlan.find((r) => r.planId === plan.id)?._count._all ?? 0;
+      return {
+        planCode: plan.code,
+        planName: plan.name,
+        orgCount: count,
+        monthlyPriceCents: plan.monthlyPriceCents,
+        mrrCents: count * plan.monthlyPriceCents,
+      };
+    });
+
   return {
     organizationCount: orgTotal,
+    freeOrganizationCount,
+    paidOrganizationCount,
+    activeSubscriptionCount,
+    pastDueCount,
+    trialingCount,
+    avgMrrPerPaidOrgCents:
+      paidOrganizationCount > 0
+        ? Math.round(mrrCents / paidOrganizationCount)
+        : 0,
     orgsByPlan,
+    revenueByPlan,
     subscriptionsByStatus,
     mrrCents,
-    paidOrganizationCount: paidOrgs.filter((o) => o.plan.code !== "free")
-      .length,
+  };
+}
+
+export async function listAuditLogs(params: ListParams) {
+  const where: Prisma.AuditLogWhereInput = params.search
+    ? {
+        OR: [
+          { action: { contains: params.search, mode: "insensitive" } },
+          { entityType: { contains: params.search, mode: "insensitive" } },
+          { entityId: { contains: params.search, mode: "insensitive" } },
+        ],
+      }
+    : {};
+
+  const [total, rows] = await Promise.all([
+    prisma.auditLog.count({ where }),
+    prisma.auditLog.findMany({
+      where,
+      include: {
+        actor: { select: { id: true, email: true, name: true } },
+      },
+      orderBy: { createdAt: "desc" },
+      skip: (params.page - 1) * params.pageSize,
+      take: params.pageSize,
+    }),
+  ]);
+
+  return {
+    data: rows.map((r) => ({
+      id: r.id,
+      action: r.action,
+      entityType: r.entityType,
+      entityId: r.entityId,
+      meta: r.meta,
+      createdAt: r.createdAt,
+      actor: r.actor,
+    })),
+    meta: { total, page: params.page, pageSize: params.pageSize },
   };
 }
 

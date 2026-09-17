@@ -6,15 +6,19 @@ import { validateBody } from "../../middleware/validate.js";
 import { authenticate } from "../../middleware/authenticate.js";
 import { rateLimit, rateLimitKey } from "../../middleware/rate-limit.js";
 import {
+  forgotPasswordSchema,
   loginSchema,
   refreshSchema,
   registerSchema,
+  resetPasswordSchema,
 } from "./auth.schemas.js";
 import { verifyAccessToken } from "../../lib/tokens.js";
 import {
   getMe,
   login,
   register,
+  requestPasswordReset,
+  resetPassword,
   revokeRefresh,
   rotateRefresh,
 } from "./auth.service.js";
@@ -151,3 +155,29 @@ authRoutes.get("/me", authenticate, async (req, res, next) => {
     next(err);
   }
 });
+
+authRoutes.post(
+  "/forgot-password",
+  validateBody(forgotPasswordSchema),
+  async (req, res, next) => {
+    try {
+      const result = await requestPasswordReset(req.body);
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+authRoutes.post(
+  "/reset-password",
+  validateBody(resetPasswordSchema),
+  async (req, res, next) => {
+    try {
+      const result = await resetPassword(req.body);
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
