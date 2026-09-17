@@ -26,7 +26,7 @@ orgsRoutes.get(
   requireOrg,
   async (req, res, next) => {
     try {
-      if (!req.auth) {
+      if (!req.auth?.orgId) {
         throw new AppError("UNAUTHORIZED", "Missing access token", 401);
       }
       const org = await getCurrent(req.auth.orgId);
@@ -45,7 +45,7 @@ orgsRoutes.patch(
   validateBody(patchCurrentOrgSchema),
   async (req, res, next) => {
     try {
-      if (!req.auth) {
+      if (!req.auth?.orgId) {
         throw new AppError("UNAUTHORIZED", "Missing access token", 401);
       }
       const org = await patchCurrent(req.auth.orgId, req.body);
@@ -62,7 +62,7 @@ orgsRoutes.get(
   requireOrg,
   async (req, res, next) => {
     try {
-      if (!req.auth) {
+      if (!req.auth?.orgId) {
         throw new AppError("UNAUTHORIZED", "Missing access token", 401);
       }
       const members = await listMembers(req.auth.orgId);
@@ -81,7 +81,7 @@ orgsRoutes.post(
   validateBody(createInviteSchema),
   async (req, res, next) => {
     try {
-      if (!req.auth) {
+      if (!req.auth?.orgId) {
         throw new AppError("UNAUTHORIZED", "Missing access token", 401);
       }
       const result = await createInvite({

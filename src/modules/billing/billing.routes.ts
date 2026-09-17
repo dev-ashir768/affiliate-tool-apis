@@ -38,7 +38,7 @@ billingRoutes.post(
   validateBody(checkoutSessionSchema),
   async (req, res, next) => {
     try {
-      if (!req.auth) {
+      if (!req.auth?.orgId) {
         throw new AppError("UNAUTHORIZED", "Missing access token", 401);
       }
       const user = await prisma.user.findUniqueOrThrow({
@@ -63,7 +63,7 @@ billingRoutes.post(
   requireRole("OWNER", "ADMIN"),
   async (req, res, next) => {
     try {
-      if (!req.auth) {
+      if (!req.auth?.orgId) {
         throw new AppError("UNAUTHORIZED", "Missing access token", 401);
       }
       const session = await createPortalSession({

@@ -10,6 +10,7 @@ import {
   refreshSchema,
   registerSchema,
 } from "./auth.schemas.js";
+import { verifyAccessToken } from "../../lib/tokens.js";
 import {
   getMe,
   login,
@@ -72,6 +73,8 @@ authRoutes.post("/register", validateBody(registerSchema), async (req, res, next
     res.status(201).json({
       user: result.user,
       organization: result.organization,
+      platformMembership: result.platformMembership,
+      redirectTo: result.redirectTo,
       accessToken: result.accessToken,
       refreshToken: result.refreshToken,
     });
@@ -87,6 +90,8 @@ authRoutes.post("/login", validateBody(loginSchema), async (req, res, next) => {
     res.json({
       user: result.user,
       organizationId: result.organizationId,
+      platformMembership: result.platformMembership,
+      redirectTo: result.redirectTo,
       accessToken: result.accessToken,
       refreshToken: result.refreshToken,
     });
@@ -98,7 +103,20 @@ authRoutes.post("/login", validateBody(loginSchema), async (req, res, next) => {
 authRoutes.post("/refresh", validateBody(refreshSchema), async (req, res, next) => {
   try {
     const raw = rawRefreshFromRequest(req);
-    const result = await rotateRefresh(raw);
+    let preferredOrgId: string | null | undefined;
+    const header = req.headers.authorization;
+    if (header?.startsWith("Bearer ")) {
+      const access = header.slice("Bearer ".length).trim();
+      if (access) {
+        try {
+          const prior = await verifyAccessToken(access);
+          preferredOrgId = prior.orgId;
+        } catch {
+          // Expired/invalid access token — fall back to first ACTIVE membership
+        }
+      }
+    }
+    const result = await rotateRefresh(raw, preferredOrgId);
     setRefreshCookie(res, result.refreshToken);
     res.json({
       accessToken: result.accessToken,

@@ -16,6 +16,9 @@ export const requireOrg: RequestHandler = async (req, _res, next) => {
     if (!req.auth) {
       throw new AppError("UNAUTHORIZED", "Missing access token", 401);
     }
+    if (!req.auth.orgId) {
+      throw new AppError("FORBIDDEN", "Organization context required", 403);
+    }
     const membership = await prisma.membership.findFirst({
       where: {
         userId: req.auth.sub,

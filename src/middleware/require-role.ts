@@ -5,7 +5,7 @@ import { AppError } from "../lib/errors.js";
 export function requireRole(...roles: MembershipRole[]): RequestHandler {
   return (req, _res, next) => {
     try {
-      const role = req.membership?.role ?? req.auth?.role;
+      const role = req.membership?.role ?? req.auth?.orgRole;
       if (!role || !roles.includes(role)) {
         throw new AppError("FORBIDDEN", "Insufficient role", 403);
       }

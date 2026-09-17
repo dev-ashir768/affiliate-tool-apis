@@ -5,14 +5,19 @@ import { sha256 } from "./crypto.js";
 
 export type AccessClaims = {
   sub: string;
-  orgId: string;
-  role: "OWNER" | "ADMIN" | "MEMBER";
+  orgId: string | null;
+  orgRole: "OWNER" | "ADMIN" | "MEMBER" | null;
+  platformRole: "SUPERADMIN" | "FINANCE" | "OPS" | null;
 };
 
 const accessKey = () => new TextEncoder().encode(env.JWT_ACCESS_SECRET);
 
 export async function signAccessToken(claims: AccessClaims): Promise<string> {
-  return new SignJWT({ orgId: claims.orgId, role: claims.role })
+  return new SignJWT({
+    orgId: claims.orgId,
+    orgRole: claims.orgRole,
+    platformRole: claims.platformRole,
+  })
     .setProtectedHeader({ alg: "HS256" })
     .setSubject(claims.sub)
     .setIssuedAt()
@@ -24,8 +29,9 @@ export async function verifyAccessToken(token: string): Promise<AccessClaims> {
   const { payload } = await jwtVerify(token, accessKey());
   return {
     sub: String(payload.sub),
-    orgId: String(payload.orgId),
-    role: payload.role as AccessClaims["role"],
+    orgId: payload.orgId == null ? null : String(payload.orgId),
+    orgRole: (payload.orgRole as AccessClaims["orgRole"]) ?? null,
+    platformRole: (payload.platformRole as AccessClaims["platformRole"]) ?? null,
   };
 }
 

@@ -18,7 +18,7 @@ export const shopsRoutes = Router();
 
 shopsRoutes.get("/", authenticate, requireOrg, async (req, res, next) => {
   try {
-    if (!req.auth) {
+    if (!req.auth?.orgId) {
       throw new AppError("UNAUTHORIZED", "Missing access token", 401);
     }
     const shops = await listShops(req.auth.orgId);
@@ -36,7 +36,7 @@ shopsRoutes.post(
   validateBody(connectShopSchema),
   async (req, res, next) => {
     try {
-      if (!req.auth) {
+      if (!req.auth?.orgId) {
         throw new AppError("UNAUTHORIZED", "Missing access token", 401);
       }
       const shop = await connectShop({
@@ -52,7 +52,7 @@ shopsRoutes.post(
 
 shopsRoutes.get("/:id", authenticate, requireOrg, async (req, res, next) => {
   try {
-    if (!req.auth) {
+    if (!req.auth?.orgId) {
       throw new AppError("UNAUTHORIZED", "Missing access token", 401);
     }
     const shop = await getShop(req.auth.orgId, String(req.params.id));
@@ -74,7 +74,7 @@ shopsRoutes.post(
   requireRole("OWNER", "ADMIN"),
   async (req, res, next) => {
     try {
-      if (!req.auth) {
+      if (!req.auth?.orgId) {
         throw new AppError("UNAUTHORIZED", "Missing access token", 401);
       }
       const result = await requestVerify(req.auth.orgId, String(req.params.id));
@@ -92,7 +92,7 @@ shopsRoutes.delete(
   requireRole("OWNER", "ADMIN"),
   async (req, res, next) => {
     try {
-      if (!req.auth) {
+      if (!req.auth?.orgId) {
         throw new AppError("UNAUTHORIZED", "Missing access token", 401);
       }
       const shop = await disconnectShop(req.auth.orgId, String(req.params.id));
