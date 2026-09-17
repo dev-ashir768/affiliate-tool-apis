@@ -223,11 +223,19 @@ async function main() {
       allowedPlatformRoles: [PlatformRole.SUPERADMIN, PlatformRole.OPS],
     },
     {
+      key: "creators",
+      label: "Creators",
+      href: "/backoffice/creators",
+      icon: "Sparkles",
+      sortOrder: 3,
+      allowedPlatformRoles: [PlatformRole.SUPERADMIN, PlatformRole.OPS],
+    },
+    {
       key: "finance",
       label: "Finance",
       href: "/backoffice/finance",
       icon: "BadgeDollarSign",
-      sortOrder: 3,
+      sortOrder: 4,
       allowedPlatformRoles: [PlatformRole.SUPERADMIN, PlatformRole.FINANCE],
     },
     {
@@ -235,7 +243,7 @@ async function main() {
       label: "Audit",
       href: "/backoffice/audit",
       icon: "ScrollText",
-      sortOrder: 4,
+      sortOrder: 5,
       allowedPlatformRoles: [PlatformRole.SUPERADMIN],
     },
     {
@@ -243,7 +251,7 @@ async function main() {
       label: "Proxies",
       href: "/backoffice/proxies",
       icon: "Globe",
-      sortOrder: 5,
+      sortOrder: 6,
       allowedPlatformRoles: [PlatformRole.SUPERADMIN, PlatformRole.OPS],
     },
     {
@@ -251,7 +259,7 @@ async function main() {
       label: "Crawler",
       href: "/backoffice/crawler",
       icon: "Bot",
-      sortOrder: 6,
+      sortOrder: 7,
       allowedPlatformRoles: [PlatformRole.SUPERADMIN, PlatformRole.OPS],
     },
     {
@@ -259,7 +267,7 @@ async function main() {
       label: "Navigation",
       href: "/backoffice/navigation",
       icon: "Menu",
-      sortOrder: 7,
+      sortOrder: 8,
       allowedPlatformRoles: [PlatformRole.SUPERADMIN],
     },
   ]);

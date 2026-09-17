@@ -5,16 +5,13 @@ import { authenticate } from "../../middleware/authenticate.js";
 import { requirePlatform } from "../../middleware/require-platform.js";
 import {
   createProxySchema,
+  createPlatformCreatorSchema,
   createStaffSchema,
   listQuerySchema,
+  patchPlatformCreatorSchema,
   patchProxySchema,
   patchStaffSchema,
 } from "./platform.schemas.js";
-import {
-  createNavItemSchema,
-  navAreaQuerySchema,
-  patchNavItemSchema,
-} from "./navigation-admin.schemas.js";
 import {
   billingOverview,
   createProxy,
@@ -30,6 +27,16 @@ import {
   patchStaff,
   listAuditLogs,
 } from "./platform.service.js";
+import {
+  createPlatformCreator,
+  listPlatformCreators,
+  patchPlatformCreator,
+} from "./platform-creators.service.js";
+import {
+  createNavItemSchema,
+  navAreaQuerySchema,
+  patchNavItemSchema,
+} from "./navigation-admin.schemas.js";
 import {
   createNavItem,
   listNavigationAdmin,
@@ -199,6 +206,57 @@ platformRoutes.post(
     try {
       const result = await enqueueCrawlerDryRun(req.auth?.sub);
       res.status(202).json(result);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+platformRoutes.get(
+  "/creators",
+  requirePlatform("SUPERADMIN", "OPS"),
+  validateQuery(listQuerySchema),
+  async (req, res, next) => {
+    try {
+      res.json(await listPlatformCreators(req.query as any));
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+platformRoutes.post(
+  "/creators",
+  requirePlatform("SUPERADMIN", "OPS"),
+  validateBody(createPlatformCreatorSchema),
+  async (req, res, next) => {
+    try {
+      if (!req.auth?.sub) {
+        throw new AppError("UNAUTHORIZED", "Missing access token", 401);
+      }
+      const creator = await createPlatformCreator(req.body, req.auth.sub);
+      res.status(201).json(creator);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+platformRoutes.patch(
+  "/creators/:id",
+  requirePlatform("SUPERADMIN", "OPS"),
+  validateBody(patchPlatformCreatorSchema),
+  async (req, res, next) => {
+    try {
+      if (!req.auth?.sub) {
+        throw new AppError("UNAUTHORIZED", "Missing access token", 401);
+      }
+      const creator = await patchPlatformCreator(
+        String(req.params.id),
+        req.body,
+        req.auth.sub
+      );
+      res.json(creator);
     } catch (err) {
       next(err);
     }

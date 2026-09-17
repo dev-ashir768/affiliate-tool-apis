@@ -22,7 +22,49 @@ export const listQuerySchema = z.object({
   search: z.string().optional(),
   sortBy: z.string().optional(),
   sortOrder: z.enum(["asc", "desc"]).optional(),
+  organizationId: z.string().optional(),
 });
+
+export const createPlatformCreatorSchema = z.object({
+  organizationId: z.string().min(1),
+  handle: z.string().trim().min(1).max(100),
+  displayName: z.string().trim().max(200).optional().nullable(),
+  contactEmail: z
+    .string()
+    .trim()
+    .email()
+    .optional()
+    .nullable()
+    .or(z.literal("")),
+  region: z.enum(["US", "UK"]).optional().nullable(),
+  followerCount: z.number().int().nonnegative().optional().nullable(),
+  notes: z.string().trim().max(5000).optional().nullable(),
+  stage: z
+    .enum(["LEAD", "CONTACTED", "INVITED", "ACTIVE", "REJECTED"])
+    .optional(),
+});
+
+export const patchPlatformCreatorSchema = z
+  .object({
+    handle: z.string().trim().min(1).max(100).optional(),
+    displayName: z.string().trim().max(200).optional().nullable(),
+    contactEmail: z
+      .string()
+      .trim()
+      .email()
+      .optional()
+      .nullable()
+      .or(z.literal("")),
+    region: z.enum(["US", "UK"]).optional().nullable(),
+    followerCount: z.number().int().nonnegative().optional().nullable(),
+    notes: z.string().trim().max(5000).optional().nullable(),
+    stage: z
+      .enum(["LEAD", "CONTACTED", "INVITED", "ACTIVE", "REJECTED"])
+      .optional(),
+  })
+  .refine((b) => Object.keys(b).length > 0, {
+    message: "At least one field is required",
+  });
 
 export const createProxySchema = z.object({
   label: z.string().trim().min(1).max(120),
