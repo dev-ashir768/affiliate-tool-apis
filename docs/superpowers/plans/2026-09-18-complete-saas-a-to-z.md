@@ -32,9 +32,9 @@
 | **6** | Hardening (reset, audit, finance, playwright dry-run) | ✅ Done |
 | **Polish** | Auth contrast, Sonner, proxy route-policy, Stripe cancel→free | ✅ Done on `main` |
 | **7** | Ops completeness (proxies, nav admin, email, crawler) | ✅ Done on `main` (crawler on branch → merge) |
-| **8** | Real shop verify (Playwright / bot pipeline) | ⬜ Next |
-| **9** | Growth product (creators, campaigns, outreach) | ⬜ Post-v1 |
-| **10** | Scale & polish (email provider, observability, multi-region) | ⬜ Later |
+| **8** | Real shop verify (Playwright / bot pipeline) | ✅ Slice 1+2+3 scaffolding on `main` path |
+| **9** | Growth product (creators, campaigns, outreach) | 🔄 Slice 1 CRM+campaigns shipped; discovery/outreach later |
+| **10** | Scale & polish (email provider, observability, multi-region) | 🔄 Runbook + flags; Sentry DSN reserved |
 
 ---
 

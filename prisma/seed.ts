@@ -156,20 +156,34 @@ async function main() {
       icon: "Store",
       sortOrder: 1,
     },
-    { key: "team", label: "Team", href: "/team", icon: "Users", sortOrder: 2 },
+    {
+      key: "creators",
+      label: "Creators",
+      href: "/creators",
+      icon: "Sparkles",
+      sortOrder: 2,
+    },
+    {
+      key: "campaigns",
+      label: "Campaigns",
+      href: "/campaigns",
+      icon: "Megaphone",
+      sortOrder: 3,
+    },
+    { key: "team", label: "Team", href: "/team", icon: "Users", sortOrder: 4 },
     {
       key: "billing",
       label: "Billing",
       href: "/billing",
       icon: "CreditCard",
-      sortOrder: 3,
+      sortOrder: 5,
     },
     {
       key: "settings",
       label: "Settings",
       href: "/settings",
       icon: "Settings",
-      sortOrder: 4,
+      sortOrder: 6,
     },
   ]);
 

@@ -8,6 +8,10 @@ declare module "playwright" {
             opts?: { waitUntil?: string; timeout?: number }
           ) => Promise<unknown>;
           click: (selector: string, opts?: { timeout?: number }) => Promise<void>;
+          waitForSelector: (
+            selector: string,
+            opts?: { timeout?: number }
+          ) => Promise<unknown>;
           evaluate: <T>(fn: () => T) => Promise<T>;
           title: () => Promise<string>;
           close: () => Promise<void>;

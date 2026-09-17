@@ -94,6 +94,25 @@ enum ProxyProtocol {
   SOCKS5
 }
 
+enum CreatorPlatform {
+  TIKTOK
+}
+
+enum CreatorStage {
+  LEAD
+  CONTACTED
+  INVITED
+  ACTIVE
+  REJECTED
+}
+
+enum CampaignStatus {
+  DRAFT
+  ACTIVE
+  PAUSED
+  DONE
+}
+
 model User {
   id           String         @id @default(cuid())
   email        String         @unique
@@ -138,6 +157,9 @@ model Organization {
   memberships      Membership[]
   subscription     Subscription?
   shops            Shop[]
+  creators         Creator[]
+  creatorLists     CreatorList[]
+  campaigns        Campaign[]
 }
 
 model Membership {
@@ -317,4 +339,66 @@ model Proxy {
   @@index([status])
   @@index([region])
   @@unique([host, port, protocol])
+}
+
+model Creator {
+  id             String          @id @default(cuid())
+  organizationId String
+  organization   Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  platform       CreatorPlatform @default(TIKTOK)
+  handle         String
+  displayName    String?
+  region         ShopRegion?
+  followerCount  Int?
+  notes          String?
+  stage          CreatorStage    @default(LEAD)
+  listMembers    CreatorListMember[]
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  @@unique([organizationId, platform, handle])
+  @@index([organizationId])
+  @@index([stage])
+}
+
+model CreatorList {
+  id             String             @id @default(cuid())
+  organizationId String
+  organization   Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name           String
+  description    String?
+  members        CreatorListMember[]
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+
+  @@unique([organizationId, name])
+  @@index([organizationId])
+}
+
+model CreatorListMember {
+  id        String      @id @default(cuid())
+  listId    String
+  list      CreatorList @relation(fields: [listId], references: [id], onDelete: Cascade)
+  creatorId String
+  creator   Creator     @relation(fields: [creatorId], references: [id], onDelete: Cascade)
+  createdAt DateTime    @default(now())
+
+  @@unique([listId, creatorId])
+  @@index([creatorId])
+}
+
+model Campaign {
+  id             String         @id @default(cuid())
+  organizationId String
+  organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name           String
+  status         CampaignStatus @default(DRAFT)
+  brief          String?
+  offerNote      String?
+  deadline       DateTime?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  @@index([organizationId])
+  @@index([status])
 }

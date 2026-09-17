@@ -4,7 +4,13 @@ import { env } from "../config/env.js";
 import { logger } from "../lib/logger.js";
 import { prisma } from "../lib/prisma.js";
 import { encryptVault } from "../lib/crypto.js";
+import { waitForBotInviteIfConfigured } from "../lib/bot-inbox.js";
 import { ShopVerifyTerminalError } from "./shop-verify.errors.js";
+import {
+  liveAcceptSelector,
+  liveTimeoutMs,
+  resolveLiveInviteUrl,
+} from "./shop-verify.live.js";
 import type { ShopVerifyJobData } from "./shop-verify.processor.js";
 
 type PlaywrightPage = {
@@ -13,6 +19,10 @@ type PlaywrightPage = {
     opts?: { waitUntil?: string; timeout?: number }
   ) => Promise<unknown>;
   click: (selector: string, opts?: { timeout?: number }) => Promise<void>;
+  waitForSelector: (
+    selector: string,
+    opts?: { timeout?: number }
+  ) => Promise<unknown>;
   evaluate: <T>(fn: () => T) => Promise<T>;
   close: () => Promise<void>;
 };
@@ -77,12 +87,70 @@ async function waitForOutcome(
   throw new ShopVerifyTerminalError("VERIFY_TIMEOUT");
 }
 
+async function launchChromium(): Promise<PlaywrightChromium> {
+  try {
+    const playwright = await import("playwright");
+    return playwright.chromium as unknown as PlaywrightChromium;
+  } catch {
+    throw new ShopVerifyTerminalError("PLAYWRIGHT_MISSING");
+  }
+}
+
+async function runFixtureAccept(opts: {
+  page: PlaywrightPage;
+  shopId: string;
+  region: string;
+}): Promise<"accepted"> {
+  const fixtureUrl = buildFixtureUrl({
+    shopId: opts.shopId,
+    region: opts.region,
+    auto: "accept",
+  });
+  await opts.page.goto(fixtureUrl, {
+    waitUntil: "domcontentloaded",
+    timeout: 15_000,
+  });
+
+  let outcome = await readOutcome(opts.page);
+  if (!outcome) {
+    await opts.page.click("#btn-accept", { timeout: 10_000 });
+    outcome = await waitForOutcome(opts.page, 10_000);
+  }
+
+  if (outcome === "rejected") {
+    throw new ShopVerifyTerminalError("INVITE_REJECTED");
+  }
+  if (outcome === "expired") {
+    throw new ShopVerifyTerminalError("INVITE_EXPIRED");
+  }
+  if (outcome !== "accepted") {
+    throw new ShopVerifyTerminalError("VERIFY_TIMEOUT");
+  }
+  return "accepted";
+}
+
+async function runLiveAccept(opts: {
+  page: PlaywrightPage;
+  region: "US" | "UK";
+}): Promise<void> {
+  const url = resolveLiveInviteUrl(opts.region);
+  const selector = liveAcceptSelector();
+  const timeout = liveTimeoutMs();
+
+  await opts.page.goto(url, {
+    waitUntil: "domcontentloaded",
+    timeout,
+  });
+  await opts.page.waitForSelector(selector, { timeout });
+  await opts.page.click(selector, { timeout });
+}
+
 /**
  * Playwright shop verify.
- * - Default: dry-run activates the shop (same outcome as stub) so PLAYWRIGHT mode
- *   is usable without TikTok credentials.
- * - Set PLAYWRIGHT_SHOP_VERIFY_DRY_RUN=false and install `playwright` to run Chromium
- *   against the local invite-accept fixture and vault storageState.
+ * - Default: dry-run activates without browser.
+ * - Non-dry-run + SHOP_VERIFY_TARGET=fixture: local invite-accept HTML.
+ * - Non-dry-run + SHOP_VERIFY_TARGET=live: configured Seller Center URL + accept selector.
+ * - Optional BOT_INBOX_PROVIDER waits for invite mail before browser (live path).
  */
 export async function runPlaywrightVerify(data: ShopVerifyJobData): Promise<void> {
   const { shopId, verificationJobId } = data;
@@ -100,46 +168,36 @@ export async function runPlaywrightVerify(data: ShopVerifyJobData): Promise<void
     return;
   }
 
-  const shop = await prisma.shop.findUniqueOrThrow({ where: { id: shopId } });
-
-  let chromium: PlaywrightChromium;
-  try {
-    const playwright = await import("playwright");
-    chromium = playwright.chromium as unknown as PlaywrightChromium;
-  } catch {
-    throw new ShopVerifyTerminalError("PLAYWRIGHT_MISSING");
-  }
-
-  const fixtureUrl = buildFixtureUrl({
-    shopId,
-    region: shop.region,
-    auto: "accept",
+  const shop = await prisma.shop.findUniqueOrThrow({
+    where: { id: shopId },
+    include: { botIdentity: true },
   });
 
+  if (env.SHOP_VERIFY_TARGET === "live" && shop.botIdentity?.email) {
+    const hit = await waitForBotInviteIfConfigured(shop.botIdentity.email);
+    if (hit) {
+      logger.info("bot invite detected before live verify", {
+        shopId,
+        subject: hit.subject,
+      });
+    }
+  }
+
+  const chromium = await launchChromium();
   const browser = await chromium.launch({ headless: true });
   try {
     const context = await browser.newContext();
     const page = await context.newPage();
     try {
-      await page.goto(fixtureUrl, {
-        waitUntil: "domcontentloaded",
-        timeout: 15_000,
-      });
-
-      let outcome = await readOutcome(page);
-      if (!outcome) {
-        await page.click("#btn-accept", { timeout: 10_000 });
-        outcome = await waitForOutcome(page, 10_000);
-      }
-
-      if (outcome === "rejected") {
-        throw new ShopVerifyTerminalError("INVITE_REJECTED");
-      }
-      if (outcome === "expired") {
-        throw new ShopVerifyTerminalError("INVITE_EXPIRED");
-      }
-      if (outcome !== "accepted") {
-        throw new ShopVerifyTerminalError("VERIFY_TIMEOUT");
+      const target = env.SHOP_VERIFY_TARGET;
+      if (target === "live") {
+        await runLiveAccept({ page, region: shop.region });
+      } else {
+        await runFixtureAccept({
+          page,
+          shopId,
+          region: shop.region,
+        });
       }
 
       const storageState = await context.storageState();
@@ -147,10 +205,11 @@ export async function runPlaywrightVerify(data: ShopVerifyJobData): Promise<void
         sessionVaultCiphertext: encryptVault(
           JSON.stringify({
             mode: "playwright",
+            target,
             region: shop.region,
             storageState,
             verifiedAt: new Date().toISOString(),
-            fixture: true,
+            fixture: target === "fixture",
           })
         ),
       });

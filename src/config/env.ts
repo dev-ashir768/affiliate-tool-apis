@@ -26,6 +26,27 @@ const schema = z.object({
     .transform((v) => v === "true" || v === "1"),
   /** Override fixture URL for Playwright verify (file:// or http://). Empty = packaged fixture. */
   SHOP_VERIFY_FIXTURE_URL: z.string().optional(),
+  /** fixture = local HTML; live = region Seller Center URL (must configure URLs). */
+  SHOP_VERIFY_TARGET: z.enum(["fixture", "live"]).default("fixture"),
+  SHOP_VERIFY_LIVE_URL_US: z.string().url().optional(),
+  SHOP_VERIFY_LIVE_URL_UK: z.string().url().optional(),
+  /** CSS selector for invite accept on live pages (override when TikTok DOM changes). */
+  SHOP_VERIFY_LIVE_ACCEPT_SELECTOR: z.string().default("[data-e2e='invite-accept'], button:has-text('Accept')"),
+  SHOP_VERIFY_LIVE_TIMEOUT_MS: z.coerce.number().int().positive().default(60_000),
+  /** none = skip; console = log-only; imap = poll bot mailbox for invite mail. */
+  BOT_INBOX_PROVIDER: z.enum(["none", "console", "imap"]).default("none"),
+  BOT_INBOX_POLL_MS: z.coerce.number().int().positive().default(5_000),
+  BOT_INBOX_TIMEOUT_MS: z.coerce.number().int().positive().default(120_000),
+  BOT_INBOX_SUBJECT_INCLUDES: z.string().default("invite"),
+  IMAP_HOST: z.string().optional(),
+  IMAP_PORT: z.coerce.number().int().default(993),
+  IMAP_USER: z.string().optional(),
+  IMAP_PASS: z.string().optional(),
+  IMAP_TLS: z
+    .enum(["true", "false", "1", "0"])
+    .default("true")
+    .transform((v) => v === "true" || v === "1"),
+  SENTRY_DSN: z.string().optional(),
   PASSWORD_RESET_TTL_SEC: z.coerce.number().default(3600),
   INVITE_TTL_SEC: z.coerce.number().default(604800),
   PLATFORM_SUPERADMIN_EMAIL: z.string().email().optional(),
