@@ -1,0 +1,210 @@
+﻿# Slice1 Task1 review
+BASE: 63eef279c33b1eb57be93e27e02faecb7a0352e1
+HEAD: 24459800631c0d9016cf6df483b0f01045fa8dff
+## Commits
+2445980 feat: add PlatformMembership and navigation Prisma models
+
+## Stat
+ .env.example                                       |  3 +
+ .../20250917220000_platform_nav/migration.sql      | 67 ++++++++++++++++++++++
+ prisma/schema.prisma                               | 63 +++++++++++++++++++-
+ src/config/env.ts                                  |  2 +
+ 4 files changed, 133 insertions(+), 2 deletions(-)
+
+## Diff
+diff --git a/.env.example b/.env.example
+index d132e11..e8cd76b 100644
+--- a/.env.example
++++ b/.env.example
+@@ -11,5 +11,8 @@ CORS_ORIGINS=http://localhost:3000
+ TRUST_PROXY=false
+ STRIPE_SECRET_KEY=sk_test_xxx
+ STRIPE_WEBHOOK_SECRET=whsec_xxx
+ SHOP_VERIFY_MODE=stub
+ INVITE_TTL_SEC=604800
++# Optional: bootstrap platform superadmin on seed (Task 2)
++PLATFORM_SUPERADMIN_EMAIL=
++PLATFORM_SUPERADMIN_PASSWORD=
+diff --git a/prisma/migrations/20250917220000_platform_nav/migration.sql b/prisma/migrations/20250917220000_platform_nav/migration.sql
+new file mode 100644
+index 0000000..803f26c
+--- /dev/null
++++ b/prisma/migrations/20250917220000_platform_nav/migration.sql
+@@ -0,0 +1,67 @@
++-- CreateEnum
++CREATE TYPE "PlatformRole" AS ENUM ('SUPERADMIN', 'FINANCE', 'OPS');
++
++-- CreateEnum
++CREATE TYPE "PlatformMembershipStatus" AS ENUM ('ACTIVE', 'DISABLED');
++
++-- CreateEnum
++CREATE TYPE "NavArea" AS ENUM ('DASHBOARD', 'BACKOFFICE');
++
++-- CreateTable
++CREATE TABLE "PlatformMembership" (
++    "id" TEXT NOT NULL,
++    "userId" TEXT NOT NULL,
++    "role" "PlatformRole" NOT NULL,
++    "status" "PlatformMembershipStatus" NOT NULL DEFAULT 'ACTIVE',
++    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
++    "updatedAt" TIMESTAMP(3) NOT NULL,
++
++    CONSTRAINT "PlatformMembership_pkey" PRIMARY KEY ("id")
++);
++
++-- CreateTable
++CREATE TABLE "NavSection" (
++    "id" TEXT NOT NULL,
++    "area" "NavArea" NOT NULL,
++    "key" TEXT NOT NULL,
++    "label" TEXT,
++    "sortOrder" INTEGER NOT NULL DEFAULT 0,
++    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
++    "updatedAt" TIMESTAMP(3) NOT NULL,
++
++    CONSTRAINT "NavSection_pkey" PRIMARY KEY ("id")
++);
++
++-- CreateTable
++CREATE TABLE "NavItem" (
++    "id" TEXT NOT NULL,
++    "sectionId" TEXT NOT NULL,
++    "key" TEXT NOT NULL,
++    "label" TEXT NOT NULL,
++    "href" TEXT NOT NULL,
++    "icon" TEXT NOT NULL,
++    "sortOrder" INTEGER NOT NULL DEFAULT 0,
++    "badge" TEXT,
++    "enabled" BOOLEAN NOT NULL DEFAULT true,
++    "allowedPlatformRoles" "PlatformRole"[],
++    "allowedOrgRoles" "MembershipRole"[],
++    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
++    "updatedAt" TIMESTAMP(3) NOT NULL,
++
++    CONSTRAINT "NavItem_pkey" PRIMARY KEY ("id")
++);
++
++-- CreateIndex
++CREATE UNIQUE INDEX "PlatformMembership_userId_key" ON "PlatformMembership"("userId");
++
++-- CreateIndex
++CREATE UNIQUE INDEX "NavSection_area_key_key" ON "NavSection"("area", "key");
++
++-- CreateIndex
++CREATE UNIQUE INDEX "NavItem_sectionId_key_key" ON "NavItem"("sectionId", "key");
++
++-- AddForeignKey
++ALTER TABLE "PlatformMembership" ADD CONSTRAINT "PlatformMembership_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
++
++-- AddForeignKey
++ALTER TABLE "NavItem" ADD CONSTRAINT "NavItem_sectionId_fkey" FOREIGN KEY ("sectionId") REFERENCES "NavSection"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+diff --git a/prisma/schema.prisma b/prisma/schema.prisma
+index ee2fc3a..12f359b 100644
+--- a/prisma/schema.prisma
++++ b/prisma/schema.prisma
+@@ -63,20 +63,37 @@ enum VerificationJobStatus {
+   RUNNING
+   SUCCEEDED
+   FAILED
+ }
+ 
++enum PlatformRole {
++  SUPERADMIN
++  FINANCE
++  OPS
++}
++
++enum PlatformMembershipStatus {
++  ACTIVE
++  DISABLED
++}
++
++enum NavArea {
++  DASHBOARD
++  BACKOFFICE
++}
++
+ model User {
+   id           String         @id @default(cuid())
+   email        String         @unique
+   passwordHash String
+   name         String
+   status       UserStatus     @default(ACTIVE)
+   createdAt    DateTime       @default(now())
+   updatedAt    DateTime       @updatedAt
+-  memberships  Membership[]
+-  refreshTokens RefreshToken[]
++  memberships         Membership[]
++  refreshTokens       RefreshToken[]
++  platformMembership  PlatformMembership?
+ }
+ 
+ model Plan {
+   id                String   @id @default(cuid())
+   code              String   @unique // starter | growth | agency | free
+@@ -196,5 +213,47 @@ model StripeEvent {
+   id          String   @id @default(cuid())
+   eventId     String   @unique
+   type        String
+   processedAt DateTime @default(now())
+ }
++
++model PlatformMembership {
++  id        String                   @id @default(cuid())
++  userId    String                   @unique
++  user      User                     @relation(fields: [userId], references: [id])
++  role      PlatformRole
++  status    PlatformMembershipStatus @default(ACTIVE)
++  createdAt DateTime                 @default(now())
++  updatedAt DateTime                 @updatedAt
++}
++
++model NavSection {
++  id        String    @id @default(cuid())
++  area      NavArea
++  key       String
++  label     String?
++  sortOrder Int       @default(0)
++  items     NavItem[]
++  createdAt DateTime  @default(now())
++  updatedAt DateTime  @updatedAt
++
++  @@unique([area, key])
++}
++
++model NavItem {
++  id                   String           @id @default(cuid())
++  sectionId            String
++  section              NavSection       @relation(fields: [sectionId], references: [id], onDelete: Cascade)
++  key                  String
++  label                String
++  href                 String
++  icon                 String
++  sortOrder            Int              @default(0)
++  badge                String?
++  enabled              Boolean          @default(true)
++  allowedPlatformRoles PlatformRole[]
++  allowedOrgRoles      MembershipRole[]
++  createdAt            DateTime         @default(now())
++  updatedAt            DateTime         @updatedAt
++
++  @@unique([sectionId, key])
++}
+diff --git a/src/config/env.ts b/src/config/env.ts
+index a03ee35..2ad1e1d 100644
+--- a/src/config/env.ts
++++ b/src/config/env.ts
+@@ -18,10 +18,12 @@ const schema = z.object({
+     .transform((v) => v === "true" || v === "1"),
+   STRIPE_SECRET_KEY: z.string().optional(),
+   STRIPE_WEBHOOK_SECRET: z.string().optional(),
+   SHOP_VERIFY_MODE: z.enum(["stub", "playwright"]).default("stub"),
+   INVITE_TTL_SEC: z.coerce.number().default(604800),
++  PLATFORM_SUPERADMIN_EMAIL: z.string().email().optional(),
++  PLATFORM_SUPERADMIN_PASSWORD: z.string().min(8).optional(),
+ });
+ 
+ export type Env = z.infer<typeof schema>;
+ 
+ export const env: Env = schema.parse(process.env);
+

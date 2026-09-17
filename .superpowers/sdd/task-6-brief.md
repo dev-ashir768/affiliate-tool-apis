@@ -1,92 +1,48 @@
-﻿### Task 6: Stripe billing (plans, checkout, portal, webhook)
+﻿### Task 6: Login redirectTo + proxy area guards
 
 **Files:**
-- Create: `src/modules/billing/stripe.ts`
-- Create: `src/modules/billing/billing.service.ts`
-- Create: `src/modules/billing/billing.routes.ts`
-- Create: `src/modules/billing/webhook.service.ts`
-- Create: `tests/billing/webhook.service.test.ts`
-- Modify: `src/app.ts` (raw body for webhook)
+- Modify: `affiliate-tool-portal/app/api/auth/login/route.ts` (pass through `redirectTo`)
+- Modify: `affiliate-tool-portal/app/api/auth/register/route.ts` (redirectTo `/home`)
+- Modify: `affiliate-tool-portal/components/auth/login-form.tsx`
+- Modify: `affiliate-tool-portal/components/auth/signup-form.tsx`
+- Modify: `affiliate-tool-portal/proxy.ts`
+- Create: `affiliate-tool-portal/lib/auth/access-token.ts` â€” decode JWT payload (base64) for `platformRole`/`orgId` without verify in proxy OR verify with shared secret via `JWT_ACCESS_SECRET` in portal env
 
 **Interfaces:**
-- Consumes: Stripe SDK, Plan.stripePriceId, Organization.stripeCustomerId
-- Produces:
-  - `GET /api/v1/billing/plans`
-  - `POST /api/v1/billing/checkout-session` `{ planCode }`
-  - `POST /api/v1/billing/portal-session`
-  - `POST /api/v1/webhooks/stripe`
-  - `applySubscriptionFromStripe(event)` idempotent via `StripeEvent`
+- Login JSON includes `redirectTo`
+- Login form: `const next = searchParams.get("next");` if next allowed for role use it; else `payload.redirectTo`
+- Allowed: staff may only `next` under `/backoffice`; merchants only non-backoffice
 
-- [ ] **Step 1: Install Stripe**
+**proxy.ts rules:**
+- `/backoffice/*` â†’ require `platformRole` in access token (refresh if needed); else redirect `/login` or `/home` if merchant-only
+- Dashboard protected paths â†’ require `orgId` OR (merchant session); if staff-only (platformRole && !orgId) hitting `/home` â†’ redirect `/backoffice/users`
+- Auth pages: if session â†’ redirect using same rules as login
+
+- [ ] **Step 1: Add `JWT_ACCESS_SECRET` to portal `.env.example`** (same value as API) for optional verify; or decode-only for routing (document trust boundary: httpOnly cookie set only by BFF).
+
+Preferred: decode payload without verify for routing UX; API still verifies on every call. Cookie theft risk unchanged.
+
+```ts
+export function readAccessClaims(token: string): {
+  orgId: string | null;
+  platformRole: string | null;
+} | null
+```
+
+- [ ] **Step 2: Update login/register forms + BFF responses**
+
+- [ ] **Step 3: Update proxy.ts** with area checks after token present/refresh
+
+- [ ] **Step 4: Manual E2E**
+  1. Login SUPERADMIN â†’ `/backoffice/users`, backoffice nav from API
+  2. Login merchant â†’ `/home`, dashboard nav from API
+  3. Merchant cannot open `/backoffice/users` (redirect)
+  4. Staff-only cannot open `/home` (redirect to backoffice)
+
+- [ ] **Step 5: Commit (portal)**
 
 ```bash
-npm install stripe
-```
-
-- [ ] **Step 2: Failing test â€” processing same event twice is idempotent**
-
-```ts
-it("ignores duplicate stripe event ids", async () => {
-  const event = {
-    id: `evt_test_${Date.now()}`,
-    type: "customer.subscription.updated",
-    data: {
-      object: {
-        id: "sub_test",
-        status: "active",
-        customer: "cus_test",
-        items: { data: [{ price: { id: "price_growth" } }] },
-        current_period_end: Math.floor(Date.now() / 1000) + 86400,
-      },
-    },
-  };
-  // seed org with stripeCustomerId cus_test and plan stripePriceId price_growth
-  await handleStripeEvent(event as any);
-  await handleStripeEvent(event as any); // no throw
-  const count = await prisma.stripeEvent.count({ where: { eventId: event.id } });
-  expect(count).toBe(1);
-});
-```
-
-- [ ] **Step 3: Implement webhook handler**
-
-On `checkout.session.completed` / `customer.subscription.*`:
-1. Insert `StripeEvent` (unique); on conflict return early
-2. Resolve org by `stripeCustomerId` or `client_reference_id` / metadata `organizationId`
-3. Upsert `Subscription`
-4. Find `Plan` by `stripePriceId`; copy `seatLimit`, `shopLimit`, `dailyInviteQuota`, `planId` onto Organization
-
-Checkout session creation:
-
-```ts
-await stripe.checkout.sessions.create({
-  mode: "subscription",
-  customer: org.stripeCustomerId ?? undefined,
-  customer_email: org.stripeCustomerId ? undefined : actorEmail,
-  line_items: [{ price: plan.stripePriceId!, quantity: 1 }],
-  success_url: `${portalUrl}/billing/success`,
-  cancel_url: `${portalUrl}/billing/cancel`,
-  metadata: { organizationId: org.id },
-  client_reference_id: org.id,
-});
-```
-
-Ensure webhook route uses:
-
-```ts
-app.post(
-  "/api/v1/webhooks/stripe",
-  express.raw({ type: "application/json" }),
-  billingWebhookHandler
-);
-```
-
-Mount this **before** `express.json()`.
-
-- [ ] **Step 4: Run tests; commit**
-
-```bash
-git commit -m "feat: add Stripe checkout, portal, and idempotent webhooks"
+git commit -m "feat: role-based login redirect and proxy area guards"
 ```
 
 ---

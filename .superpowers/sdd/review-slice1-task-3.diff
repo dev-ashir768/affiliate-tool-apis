@@ -1,0 +1,711 @@
+# Slice1 Task3
+BASE: 961bdd7b88de7c847a47e0d641d52da88ec14e89
+HEAD: 8653fe81460d2de7d4bf550947a3de3e659c06ea
+8653fe8 feat: extend JWT and /me with platformRole and redirectTo
+ src/lib/password.ts                   |  12 +++-
+ src/lib/tokens.ts                     |  16 ++++--
+ src/middleware/require-org.ts         |   3 +
+ src/middleware/require-platform.ts    |  17 ++++++
+ src/middleware/require-role.ts        |   2 +-
+ src/modules/auth/auth.routes.ts       |  20 ++++++-
+ src/modules/auth/auth.service.ts      | 103 ++++++++++++++++++++++++++--------
+ src/modules/billing/billing.routes.ts |   4 +-
+ src/modules/orgs/orgs.routes.ts       |   8 +--
+ src/modules/shops/shops.routes.ts     |  10 ++--
+ tests/auth/claims.test.ts             | 102 +++++++++++++++++++++++++++++++++
+ tests/lib/tokens.test.ts              |   6 +-
+ 12 files changed, 258 insertions(+), 45 deletions(-)
+diff --git a/src/lib/password.ts b/src/lib/password.ts
+index 504235f..a552781 100644
+--- a/src/lib/password.ts
++++ b/src/lib/password.ts
+@@ -1,12 +1,22 @@
+-import argon2 from "argon2";
++type Argon2 = typeof import("argon2");
++
++let argon2Module: Argon2 | null = null;
++
++async function loadArgon2(): Promise<Argon2> {
++  if (argon2Module) return argon2Module;
++  argon2Module = await import("argon2");
++  return argon2Module;
++}
+ 
+ export async function hashPassword(password: string): Promise<string> {
++  const argon2 = await loadArgon2();
+   return argon2.hash(password, { type: argon2.argon2id });
+ }
+ 
+ export async function verifyPassword(
+   hash: string,
+   password: string
+ ): Promise<boolean> {
++  const argon2 = await loadArgon2();
+   return argon2.verify(hash, password);
+ }
+diff --git a/src/lib/tokens.ts b/src/lib/tokens.ts
+index f92686a..4a134cd 100644
+--- a/src/lib/tokens.ts
++++ b/src/lib/tokens.ts
+@@ -3,18 +3,23 @@ import { randomBytes } from "node:crypto";
+ import { env } from "../config/env.js";
+ import { sha256 } from "./crypto.js";
+ 
+ export type AccessClaims = {
+   sub: string;
+-  orgId: string;
+-  role: "OWNER" | "ADMIN" | "MEMBER";
++  orgId: string | null;
++  orgRole: "OWNER" | "ADMIN" | "MEMBER" | null;
++  platformRole: "SUPERADMIN" | "FINANCE" | "OPS" | null;
+ };
+ 
+ const accessKey = () => new TextEncoder().encode(env.JWT_ACCESS_SECRET);
+ 
+ export async function signAccessToken(claims: AccessClaims): Promise<string> {
+-  return new SignJWT({ orgId: claims.orgId, role: claims.role })
++  return new SignJWT({
++    orgId: claims.orgId,
++    orgRole: claims.orgRole,
++    platformRole: claims.platformRole,
++  })
+     .setProtectedHeader({ alg: "HS256" })
+     .setSubject(claims.sub)
+     .setIssuedAt()
+     .setExpirationTime(`${env.ACCESS_TOKEN_TTL_SEC}s`)
+     .sign(accessKey());
+@@ -22,12 +27,13 @@ export async function signAccessToken(claims: AccessClaims): Promise<string> {
+ 
+ export async function verifyAccessToken(token: string): Promise<AccessClaims> {
+   const { payload } = await jwtVerify(token, accessKey());
+   return {
+     sub: String(payload.sub),
+-    orgId: String(payload.orgId),
+-    role: payload.role as AccessClaims["role"],
++    orgId: payload.orgId == null ? null : String(payload.orgId),
++    orgRole: (payload.orgRole as AccessClaims["orgRole"]) ?? null,
++    platformRole: (payload.platformRole as AccessClaims["platformRole"]) ?? null,
+   };
+ }
+ 
+ export function generateRefreshToken(): { raw: string; hash: string } {
+   const raw = randomBytes(48).toString("base64url");
+diff --git a/src/middleware/require-org.ts b/src/middleware/require-org.ts
+index 9ab43a8..21aef10 100644
+--- a/src/middleware/require-org.ts
++++ b/src/middleware/require-org.ts
+@@ -14,10 +14,13 @@ declare global {
+ export const requireOrg: RequestHandler = async (req, _res, next) => {
+   try {
+     if (!req.auth) {
+       throw new AppError("UNAUTHORIZED", "Missing access token", 401);
+     }
++    if (!req.auth.orgId) {
++      throw new AppError("FORBIDDEN", "Organization context required", 403);
++    }
+     const membership = await prisma.membership.findFirst({
+       where: {
+         userId: req.auth.sub,
+         organizationId: req.auth.orgId,
+         status: "ACTIVE",
+diff --git a/src/middleware/require-platform.ts b/src/middleware/require-platform.ts
+new file mode 100644
+index 0000000..b938842
+--- /dev/null
++++ b/src/middleware/require-platform.ts
+@@ -0,0 +1,17 @@
++import type { RequestHandler } from "express";
++import type { PlatformRole } from "@prisma/client";
++import { AppError } from "../lib/errors.js";
++
++export function requirePlatform(...roles: PlatformRole[]): RequestHandler {
++  return (req, _res, next) => {
++    try {
++      const role = req.auth?.platformRole;
++      if (!role || !roles.includes(role)) {
++        throw new AppError("FORBIDDEN", "Insufficient platform role", 403);
++      }
++      next();
++    } catch (err) {
++      next(err);
++    }
++  };
++}
+diff --git a/src/middleware/require-role.ts b/src/middleware/require-role.ts
+index 14a0dad..6c69045 100644
+--- a/src/middleware/require-role.ts
++++ b/src/middleware/require-role.ts
+@@ -3,11 +3,11 @@ import type { MembershipRole } from "@prisma/client";
+ import { AppError } from "../lib/errors.js";
+ 
+ export function requireRole(...roles: MembershipRole[]): RequestHandler {
+   return (req, _res, next) => {
+     try {
+-      const role = req.membership?.role ?? req.auth?.role;
++      const role = req.membership?.role ?? req.auth?.orgRole;
+       if (!role || !roles.includes(role)) {
+         throw new AppError("FORBIDDEN", "Insufficient role", 403);
+       }
+       next();
+     } catch (err) {
+diff --git a/src/modules/auth/auth.routes.ts b/src/modules/auth/auth.routes.ts
+index 00bdf6e..b79dfca 100644
+--- a/src/modules/auth/auth.routes.ts
++++ b/src/modules/auth/auth.routes.ts
+@@ -8,10 +8,11 @@ import { rateLimit, rateLimitKey } from "../../middleware/rate-limit.js";
+ import {
+   loginSchema,
+   refreshSchema,
+   registerSchema,
+ } from "./auth.schemas.js";
++import { verifyAccessToken } from "../../lib/tokens.js";
+ import {
+   getMe,
+   login,
+   register,
+   revokeRefresh,
+@@ -70,10 +71,12 @@ authRoutes.post("/register", validateBody(registerSchema), async (req, res, next
+     const result = await register(req.body);
+     setRefreshCookie(res, result.refreshToken);
+     res.status(201).json({
+       user: result.user,
+       organization: result.organization,
++      platformMembership: result.platformMembership,
++      redirectTo: result.redirectTo,
+       accessToken: result.accessToken,
+       refreshToken: result.refreshToken,
+     });
+   } catch (err) {
+     next(err);
+@@ -85,10 +88,12 @@ authRoutes.post("/login", validateBody(loginSchema), async (req, res, next) => {
+     const result = await login(req.body);
+     setRefreshCookie(res, result.refreshToken);
+     res.json({
+       user: result.user,
+       organizationId: result.organizationId,
++      platformMembership: result.platformMembership,
++      redirectTo: result.redirectTo,
+       accessToken: result.accessToken,
+       refreshToken: result.refreshToken,
+     });
+   } catch (err) {
+     next(err);
+@@ -96,11 +101,24 @@ authRoutes.post("/login", validateBody(loginSchema), async (req, res, next) => {
+ });
+ 
+ authRoutes.post("/refresh", validateBody(refreshSchema), async (req, res, next) => {
+   try {
+     const raw = rawRefreshFromRequest(req);
+-    const result = await rotateRefresh(raw);
++    let preferredOrgId: string | null | undefined;
++    const header = req.headers.authorization;
++    if (header?.startsWith("Bearer ")) {
++      const access = header.slice("Bearer ".length).trim();
++      if (access) {
++        try {
++          const prior = await verifyAccessToken(access);
++          preferredOrgId = prior.orgId;
++        } catch {
++          // Expired/invalid access token GÇö fall back to first ACTIVE membership
++        }
++      }
++    }
++    const result = await rotateRefresh(raw, preferredOrgId);
+     setRefreshCookie(res, result.refreshToken);
+     res.json({
+       accessToken: result.accessToken,
+       refreshToken: result.refreshToken,
+     });
+diff --git a/src/modules/auth/auth.service.ts b/src/modules/auth/auth.service.ts
+index 5320717..aa48aaa 100644
+--- a/src/modules/auth/auth.service.ts
++++ b/src/modules/auth/auth.service.ts
+@@ -1,5 +1,6 @@
++import type { MembershipRole, PlatformRole, PlatformMembershipStatus } from "@prisma/client";
+ import { prisma } from "../../lib/prisma.js";
+ import { AppError } from "../../lib/errors.js";
+ import { hashPassword, verifyPassword } from "../../lib/password.js";
+ import {
+   generateRefreshToken,
+@@ -28,10 +29,67 @@ function slugify(name: string) {
+     "-" +
+     Math.random().toString(36).slice(2, 8)
+   );
+ }
+ 
++function redirectFor(platformRole: AccessClaims["platformRole"]): string {
++  return platformRole ? "/backoffice/users" : "/home";
++}
++
++type PlatformMembershipSummary = {
++  role: PlatformRole;
++  status: PlatformMembershipStatus;
++} | null;
++
++async function resolveAccessClaims(
++  userId: string,
++  preferredOrgId?: string | null
++): Promise<{
++  claims: AccessClaims;
++  platformMembership: PlatformMembershipSummary;
++}> {
++  const platform = await prisma.platformMembership.findFirst({
++    where: { userId, status: "ACTIVE" },
++  });
++
++  let membership =
++    preferredOrgId != null
++      ? await prisma.membership.findFirst({
++          where: {
++            userId,
++            organizationId: preferredOrgId,
++            status: "ACTIVE",
++          },
++        })
++      : null;
++
++  if (!membership) {
++    membership = await prisma.membership.findFirst({
++      where: { userId, status: "ACTIVE" },
++      orderBy: { createdAt: "asc" },
++    });
++  }
++
++  if (!platform && !membership) {
++    throw new AppError("FORBIDDEN", "No active organization", 403);
++  }
++
++  const claims: AccessClaims = {
++    sub: userId,
++    orgId: membership?.organizationId ?? null,
++    orgRole: (membership?.role as MembershipRole | undefined) ?? null,
++    platformRole: (platform?.role as PlatformRole | undefined) ?? null,
++  };
++
++  return {
++    claims,
++    platformMembership: platform
++      ? { role: platform.role, status: platform.status }
++      : null,
++  };
++}
++
+ async function issueSession(claims: AccessClaims) {
+   const accessToken = await signAccessToken(claims);
+   const { raw, hash } = generateRefreshToken();
+   const expiresAt = new Date(Date.now() + refreshTtl() * 1000);
+   await prisma.refreshToken.create({
+@@ -89,20 +147,23 @@ export async function register(input: {
+   });
+ 
+   const session = await issueSession({
+     sub: result.user.id,
+     orgId: result.organization.id,
+-    role: "OWNER",
++    orgRole: "OWNER",
++    platformRole: null,
+   });
+ 
+   return {
+     user: { id: result.user.id, email: result.user.email, name: result.user.name },
+     organization: {
+       id: result.organization.id,
+       name: result.organization.name,
+       slug: result.organization.slug,
+     },
++    platformMembership: null,
++    redirectTo: redirectFor(null),
+     ...session,
+   };
+ }
+ 
+ export async function login(input: { email: string; password: string }) {
+@@ -112,55 +173,41 @@ export async function login(input: { email: string; password: string }) {
+     throw new AppError("UNAUTHORIZED", "Invalid credentials", 401);
+   }
+   if (user.status === "DISABLED") {
+     throw new AppError("FORBIDDEN", "Account is disabled", 403);
+   }
+-  const membership = await prisma.membership.findFirst({
+-    where: { userId: user.id, status: "ACTIVE" },
+-    orderBy: { createdAt: "asc" },
+-  });
+-  if (!membership) throw new AppError("FORBIDDEN", "No active organization", 403);
+ 
+-  const session = await issueSession({
+-    sub: user.id,
+-    orgId: membership.organizationId,
+-    role: membership.role,
+-  });
++  const { claims, platformMembership } = await resolveAccessClaims(user.id);
++  const session = await issueSession(claims);
+   return {
+     user: { id: user.id, email: user.email, name: user.name },
+-    organizationId: membership.organizationId,
++    organizationId: claims.orgId,
++    platformMembership,
++    redirectTo: redirectFor(claims.platformRole),
+     ...session,
+   };
+ }
+ 
+-export async function rotateRefresh(raw: string) {
++export async function rotateRefresh(raw: string, preferredOrgId?: string | null) {
+   const hash = sha256(raw);
+   if (!(await isRefreshMirrored(hash))) {
+     throw new AppError("UNAUTHORIZED", "Invalid refresh token", 401);
+   }
+   const stored = await prisma.refreshToken.findUnique({ where: { tokenHash: hash } });
+   if (!stored || stored.revokedAt || stored.expiresAt < new Date()) {
+     throw new AppError("UNAUTHORIZED", "Invalid refresh token", 401);
+   }
+ 
+-  const membership = await prisma.membership.findFirst({
+-    where: { userId: stored.userId, status: "ACTIVE" },
+-    orderBy: { createdAt: "asc" },
+-  });
+-  if (!membership) throw new AppError("FORBIDDEN", "No active organization", 403);
++  const { claims } = await resolveAccessClaims(stored.userId, preferredOrgId);
+ 
+   await prisma.refreshToken.update({
+     where: { id: stored.id },
+     data: { revokedAt: new Date() },
+   });
+   await revokeRefreshMirror(hash);
+ 
+-  return issueSession({
+-    sub: stored.userId,
+-    orgId: membership.organizationId,
+-    role: membership.role,
+-  });
++  return issueSession(claims);
+ }
+ 
+ export async function revokeRefresh(raw: string) {
+   const hash = sha256(raw);
+   const stored = await prisma.refreshToken.findUnique({ where: { tokenHash: hash } });
+@@ -171,19 +218,26 @@ export async function revokeRefresh(raw: string) {
+     });
+   }
+   await revokeRefreshMirror(hash);
+ }
+ 
+-export async function getMe(userId: string, orgId: string) {
++export async function getMe(userId: string, orgId: string | null) {
+   const user = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
++  const platform = await prisma.platformMembership.findFirst({
++    where: { userId, status: "ACTIVE" },
++  });
+   const memberships = await prisma.membership.findMany({
+     where: { userId, status: "ACTIVE" },
+     include: { organization: { include: { plan: true, subscription: true } } },
+   });
++  const platformMembership: PlatformMembershipSummary = platform
++    ? { role: platform.role, status: platform.status }
++    : null;
+   return {
+     user: { id: user.id, email: user.email, name: user.name },
+     currentOrganizationId: orgId,
++    platformMembership,
+     memberships: memberships.map((m) => ({
+       role: m.role,
+       organization: {
+         id: m.organization.id,
+         name: m.organization.name,
+@@ -192,7 +246,8 @@ export async function getMe(userId: string, orgId: string) {
+         seatLimit: m.organization.seatLimit,
+         shopLimit: m.organization.shopLimit,
+         subscriptionStatus: m.organization.subscription?.status ?? null,
+       },
+     })),
++    redirectTo: redirectFor(platformMembership?.role ?? null),
+   };
+ }
+diff --git a/src/modules/billing/billing.routes.ts b/src/modules/billing/billing.routes.ts
+index 0ad3ac5..2b27329 100644
+--- a/src/modules/billing/billing.routes.ts
++++ b/src/modules/billing/billing.routes.ts
+@@ -36,11 +36,11 @@ billingRoutes.post(
+   requireOrg,
+   requireRole("OWNER", "ADMIN"),
+   validateBody(checkoutSessionSchema),
+   async (req, res, next) => {
+     try {
+-      if (!req.auth) {
++      if (!req.auth?.orgId) {
+         throw new AppError("UNAUTHORIZED", "Missing access token", 401);
+       }
+       const user = await prisma.user.findUniqueOrThrow({
+         where: { id: req.auth.sub },
+       });
+@@ -61,11 +61,11 @@ billingRoutes.post(
+   authenticate,
+   requireOrg,
+   requireRole("OWNER", "ADMIN"),
+   async (req, res, next) => {
+     try {
+-      if (!req.auth) {
++      if (!req.auth?.orgId) {
+         throw new AppError("UNAUTHORIZED", "Missing access token", 401);
+       }
+       const session = await createPortalSession({
+         organizationId: req.auth.orgId,
+       });
+diff --git a/src/modules/orgs/orgs.routes.ts b/src/modules/orgs/orgs.routes.ts
+index 66fd909..e6891b0 100644
+--- a/src/modules/orgs/orgs.routes.ts
++++ b/src/modules/orgs/orgs.routes.ts
+@@ -24,11 +24,11 @@ orgsRoutes.get(
+   "/current",
+   authenticate,
+   requireOrg,
+   async (req, res, next) => {
+     try {
+-      if (!req.auth) {
++      if (!req.auth?.orgId) {
+         throw new AppError("UNAUTHORIZED", "Missing access token", 401);
+       }
+       const org = await getCurrent(req.auth.orgId);
+       res.json(org);
+     } catch (err) {
+@@ -43,11 +43,11 @@ orgsRoutes.patch(
+   requireOrg,
+   requireRole("OWNER", "ADMIN"),
+   validateBody(patchCurrentOrgSchema),
+   async (req, res, next) => {
+     try {
+-      if (!req.auth) {
++      if (!req.auth?.orgId) {
+         throw new AppError("UNAUTHORIZED", "Missing access token", 401);
+       }
+       const org = await patchCurrent(req.auth.orgId, req.body);
+       res.json(org);
+     } catch (err) {
+@@ -60,11 +60,11 @@ orgsRoutes.get(
+   "/current/members",
+   authenticate,
+   requireOrg,
+   async (req, res, next) => {
+     try {
+-      if (!req.auth) {
++      if (!req.auth?.orgId) {
+         throw new AppError("UNAUTHORIZED", "Missing access token", 401);
+       }
+       const members = await listMembers(req.auth.orgId);
+       res.json({ members });
+     } catch (err) {
+@@ -79,11 +79,11 @@ orgsRoutes.post(
+   requireOrg,
+   requireRole("OWNER", "ADMIN"),
+   validateBody(createInviteSchema),
+   async (req, res, next) => {
+     try {
+-      if (!req.auth) {
++      if (!req.auth?.orgId) {
+         throw new AppError("UNAUTHORIZED", "Missing access token", 401);
+       }
+       const result = await createInvite({
+         organizationId: req.auth.orgId,
+         actorUserId: req.auth.sub,
+diff --git a/src/modules/shops/shops.routes.ts b/src/modules/shops/shops.routes.ts
+index f4b7741..47328cc 100644
+--- a/src/modules/shops/shops.routes.ts
++++ b/src/modules/shops/shops.routes.ts
+@@ -16,11 +16,11 @@ import { requestVerify } from "./verify.service.js";
+ 
+ export const shopsRoutes = Router();
+ 
+ shopsRoutes.get("/", authenticate, requireOrg, async (req, res, next) => {
+   try {
+-    if (!req.auth) {
++    if (!req.auth?.orgId) {
+       throw new AppError("UNAUTHORIZED", "Missing access token", 401);
+     }
+     const shops = await listShops(req.auth.orgId);
+     res.json({ shops });
+   } catch (err) {
+@@ -34,11 +34,11 @@ shopsRoutes.post(
+   requireOrg,
+   requireRole("OWNER", "ADMIN"),
+   validateBody(connectShopSchema),
+   async (req, res, next) => {
+     try {
+-      if (!req.auth) {
++      if (!req.auth?.orgId) {
+         throw new AppError("UNAUTHORIZED", "Missing access token", 401);
+       }
+       const shop = await connectShop({
+         organizationId: req.auth.orgId,
+         region: req.body.region,
+@@ -50,11 +50,11 @@ shopsRoutes.post(
+   }
+ );
+ 
+ shopsRoutes.get("/:id", authenticate, requireOrg, async (req, res, next) => {
+   try {
+-    if (!req.auth) {
++    if (!req.auth?.orgId) {
+       throw new AppError("UNAUTHORIZED", "Missing access token", 401);
+     }
+     const shop = await getShop(req.auth.orgId, String(req.params.id));
+     res.json(shop);
+   } catch (err) {
+@@ -72,11 +72,11 @@ shopsRoutes.post(
+   authenticate,
+   requireOrg,
+   requireRole("OWNER", "ADMIN"),
+   async (req, res, next) => {
+     try {
+-      if (!req.auth) {
++      if (!req.auth?.orgId) {
+         throw new AppError("UNAUTHORIZED", "Missing access token", 401);
+       }
+       const result = await requestVerify(req.auth.orgId, String(req.params.id));
+       res.json(result);
+     } catch (err) {
+@@ -90,11 +90,11 @@ shopsRoutes.delete(
+   authenticate,
+   requireOrg,
+   requireRole("OWNER", "ADMIN"),
+   async (req, res, next) => {
+     try {
+-      if (!req.auth) {
++      if (!req.auth?.orgId) {
+         throw new AppError("UNAUTHORIZED", "Missing access token", 401);
+       }
+       const shop = await disconnectShop(req.auth.orgId, String(req.params.id));
+       res.json(shop);
+     } catch (err) {
+diff --git a/tests/auth/claims.test.ts b/tests/auth/claims.test.ts
+new file mode 100644
+index 0000000..b030bc0
+--- /dev/null
++++ b/tests/auth/claims.test.ts
+@@ -0,0 +1,102 @@
++import { describe, it, expect, afterAll } from "vitest";
++import {
++  signAccessToken,
++  verifyAccessToken,
++} from "../../src/lib/tokens.js";
++
++describe("AccessClaims", () => {
++  it("round-trips platformRole with nullable org", async () => {
++    const token = await signAccessToken({
++      sub: "staff1",
++      orgId: null,
++      orgRole: null,
++      platformRole: "SUPERADMIN",
++    });
++    const claims = await verifyAccessToken(token);
++    expect(claims.platformRole).toBe("SUPERADMIN");
++    expect(claims.orgId).toBeNull();
++    expect(claims.orgRole).toBeNull();
++  });
++
++  it("round-trips orgRole without platformRole", async () => {
++    const token = await signAccessToken({
++      sub: "merchant1",
++      orgId: "org1",
++      orgRole: "OWNER",
++      platformRole: null,
++    });
++    const claims = await verifyAccessToken(token);
++    expect(claims.orgRole).toBe("OWNER");
++    expect(claims.orgId).toBe("org1");
++    expect(claims.platformRole).toBeNull();
++  });
++});
++
++describe("staff login claims", () => {
++  const staffEmail = `staff_${Date.now()}@platform.test`;
++  const password = "Secret123!";
++  let argon2Available = true;
++  let prisma: typeof import("../../src/lib/prisma.js").prisma;
++  let redis: typeof import("../../src/lib/redis.js").redis;
++  let login: typeof import("../../src/modules/auth/auth.service.js").login;
++  let hashPassword: typeof import("../../src/lib/password.js").hashPassword;
++
++  afterAll(async () => {
++    if (!argon2Available || !prisma) return;
++    try {
++      const user = await prisma.user.findUnique({ where: { email: staffEmail } });
++      if (user) {
++        await prisma.refreshToken.deleteMany({ where: { userId: user.id } });
++        await prisma.platformMembership.deleteMany({ where: { userId: user.id } });
++        await prisma.user.delete({ where: { id: user.id } });
++      }
++    } finally {
++      await prisma.$disconnect();
++      if (redis?.status === "ready") await redis.quit();
++    }
++  });
++
++  it("issues platformRole for SUPERADMIN without requiring org", async () => {
++    try {
++      ({ hashPassword } = await import("../../src/lib/password.js"));
++      ({ prisma } = await import("../../src/lib/prisma.js"));
++      ({ redis } = await import("../../src/lib/redis.js"));
++      ({ login } = await import("../../src/modules/auth/auth.service.js"));
++      await hashPassword("probe");
++    } catch {
++      argon2Available = false;
++      console.warn(
++        "Skipping staff login claims test: argon2 native module blocked (Windows Application Control)."
++      );
++      return;
++    }
++
++    const passwordHash = await hashPassword(password);
++    const user = await prisma.user.create({
++      data: {
++        email: staffEmail,
++        passwordHash,
++        name: "Platform Staff",
++        status: "ACTIVE",
++      },
++    });
++    await prisma.platformMembership.create({
++      data: {
++        userId: user.id,
++        role: "SUPERADMIN",
++        status: "ACTIVE",
++      },
++    });
++
++    const session = await login({ email: staffEmail, password });
++    const claims = await verifyAccessToken(session.accessToken);
++    expect(claims.platformRole).toBe("SUPERADMIN");
++    expect(claims.orgId).toBeNull();
++    expect(claims.orgRole).toBeNull();
++    expect(session.redirectTo).toBe("/backoffice/users");
++    expect(session.platformMembership).toEqual({
++      role: "SUPERADMIN",
++      status: "ACTIVE",
++    });
++  }, 60000);
++});
+diff --git a/tests/lib/tokens.test.ts b/tests/lib/tokens.test.ts
+index 3460f9d..fbadbea 100644
+--- a/tests/lib/tokens.test.ts
++++ b/tests/lib/tokens.test.ts
+@@ -9,16 +9,18 @@ import {
+ describe("tokens", () => {
+   it("round-trips access JWT", async () => {
+     const token = await signAccessToken({
+       sub: "user1",
+       orgId: "org1",
+-      role: "OWNER",
++      orgRole: "OWNER",
++      platformRole: null,
+     });
+     const claims = await verifyAccessToken(token);
+     expect(claims.sub).toBe("user1");
+     expect(claims.orgId).toBe("org1");
+-    expect(claims.role).toBe("OWNER");
++    expect(claims.orgRole).toBe("OWNER");
++    expect(claims.platformRole).toBeNull();
+   });
+ 
+   it("hashes refresh tokens", () => {
+     const { raw, hash } = generateRefreshToken();
+     expect(hash).toBe(sha256(raw));
