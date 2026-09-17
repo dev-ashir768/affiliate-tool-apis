@@ -111,7 +111,16 @@ async function applyPlanAndSubscription(input: {
     data.stripeCustomerId = input.stripeCustomerId;
   }
 
-  if (input.stripePriceId) {
+  // Fully canceled → revert org to free plan limits (paid price may still be on the object)
+  if (input.status === "CANCELED") {
+    const free = await prisma.plan.findUnique({ where: { code: "free" } });
+    if (free) {
+      data.planId = free.id;
+      data.seatLimit = free.seatLimit;
+      data.shopLimit = free.shopLimit;
+      data.dailyInviteQuota = free.dailyInviteQuota;
+    }
+  } else if (input.stripePriceId) {
     const plan = await prisma.plan.findFirst({
       where: { stripePriceId: input.stripePriceId },
     });

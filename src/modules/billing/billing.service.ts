@@ -59,6 +59,9 @@ export async function createCheckoutSession(input: {
     cancel_url: `${base}/billing/cancel`,
     metadata: { organizationId: org.id },
     client_reference_id: org.id,
+    subscription_data: {
+      metadata: { organizationId: org.id },
+    },
   });
 
   return { url: session.url, id: session.id };
