@@ -233,6 +233,14 @@ async function main() {
       sortOrder: 6,
       allowedPlatformRoles: [PlatformRole.SUPERADMIN, PlatformRole.OPS],
     },
+    {
+      key: "navigation",
+      label: "Navigation",
+      href: "/backoffice/navigation",
+      icon: "Menu",
+      sortOrder: 7,
+      allowedPlatformRoles: [PlatformRole.SUPERADMIN],
+    },
   ]);
 
   const superadminEmail = await seedSuperadmin();

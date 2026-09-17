@@ -30,6 +30,8 @@ const schema = z.object({
   PLATFORM_SUPERADMIN_PASSWORD: z.string().min(8).optional(),
   /** Precomputed argon2id hash; use when native argon2 cannot run (e.g. blocked on Windows). */
   PLATFORM_SUPERADMIN_PASSWORD_HASH: z.string().min(1).optional(),
+  EMAIL_PROVIDER: z.enum(["console", "resend"]).default("console"),
+  RESEND_API_KEY: z.string().optional(),
 });
 
 export type Env = z.infer<typeof schema>;

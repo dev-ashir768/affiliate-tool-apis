@@ -12,6 +12,7 @@ import { sha256 } from "../../lib/crypto.js";
 import { env } from "../../config/env.js";
 import { logger } from "../../lib/logger.js";
 import { writeAuditLog } from "../../lib/audit.js";
+import { getEmailProvider } from "../../lib/email.js";
 import {
   mirrorRefresh,
   revokeRefreshMirror,
@@ -280,10 +281,16 @@ export async function requestPasswordReset(input: { email: string }) {
 
   const resetUrl = `${portalOrigin()}/reset-password?token=${raw}`;
 
+  await getEmailProvider().send({
+    to: user.email,
+    subject: "Reset your Tiksly password",
+    text: `Reset your password: ${resetUrl}\n\nThis link expires in ${Math.round(env.PASSWORD_RESET_TTL_SEC / 60)} minutes.`,
+    html: `<p>Reset your password:</p><p><a href="${resetUrl}">${resetUrl}</a></p><p>This link expires in ${Math.round(env.PASSWORD_RESET_TTL_SEC / 60)} minutes.</p>`,
+  });
+
   logger.info("password reset requested", {
     userId: user.id,
     email: user.email,
-    resetUrl,
   });
 
   await writeAuditLog({

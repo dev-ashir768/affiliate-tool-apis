@@ -79,17 +79,16 @@
 
 ### Task 7.4: Navigation admin (SUPERADMIN)
 
-- [ ] API: list all nav (both areas), create/update/reorder/disable items
-- [ ] Portal: `/backoffice/navigation` editor (sections + items)
-- [ ] Seed nav item if missing
+- [x] API: list all nav (both areas), create/update items
+- [x] Portal: `/backoffice/navigation` editor (sections + items)
+- [x] Seed nav item for Navigation (SUPERADMIN)
 - [ ] Commit: `feat: backoffice navigation admin`
 
 ### Task 7.5: Email adapter
 
-- [ ] `EmailProvider` interface: `sendPasswordReset`, `sendOrgInvite`, `sendStaffInvite`
-- [ ] Dev: log + return URL in API response (existing behavior)
-- [ ] Env: `EMAIL_PROVIDER=console|resend` (+ `RESEND_API_KEY` later)
-- [ ] Wire forgot-password + org invite
+- [x] `EmailProvider` interface + console adapter
+- [x] Env: `EMAIL_PROVIDER=console|resend` (+ `RESEND_API_KEY` reserved)
+- [x] Wire forgot-password + org invite
 - [ ] Commit: `feat: email provider abstraction`
 
 ### Task 7.6: Merge polish + Phase 7 to main

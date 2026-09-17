@@ -11,6 +11,11 @@ import {
   patchStaffSchema,
 } from "./platform.schemas.js";
 import {
+  createNavItemSchema,
+  navAreaQuerySchema,
+  patchNavItemSchema,
+} from "./navigation-admin.schemas.js";
+import {
   billingOverview,
   createProxy,
   createStaff,
@@ -24,6 +29,11 @@ import {
   patchStaff,
   listAuditLogs,
 } from "./platform.service.js";
+import {
+  createNavItem,
+  listNavigationAdmin,
+  patchNavItem,
+} from "./navigation-admin.service.js";
 
 export const platformRoutes = Router();
 
@@ -188,6 +198,47 @@ platformRoutes.get(
   async (req, res, next) => {
     try {
       res.json(await listAuditLogs(req.query as any));
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+platformRoutes.get(
+  "/navigation",
+  requirePlatform("SUPERADMIN"),
+  validateQuery(navAreaQuerySchema),
+  async (req, res, next) => {
+    try {
+      res.json(await listNavigationAdmin((req.query as any).area));
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+platformRoutes.post(
+  "/navigation/items",
+  requirePlatform("SUPERADMIN"),
+  validateBody(createNavItemSchema),
+  async (req, res, next) => {
+    try {
+      const item = await createNavItem(req.body);
+      res.status(201).json(item);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+platformRoutes.patch(
+  "/navigation/items/:id",
+  requirePlatform("SUPERADMIN"),
+  validateBody(patchNavItemSchema),
+  async (req, res, next) => {
+    try {
+      const item = await patchNavItem(String(req.params.id), req.body);
+      res.json(item);
     } catch (err) {
       next(err);
     }
