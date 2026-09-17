@@ -22,6 +22,8 @@ const schema = z.object({
   INVITE_TTL_SEC: z.coerce.number().default(604800),
   PLATFORM_SUPERADMIN_EMAIL: z.string().email().optional(),
   PLATFORM_SUPERADMIN_PASSWORD: z.string().min(8).optional(),
+  /** Precomputed argon2id hash; use when native argon2 cannot run (e.g. blocked on Windows). */
+  PLATFORM_SUPERADMIN_PASSWORD_HASH: z.string().min(1).optional(),
 });
 
 export type Env = z.infer<typeof schema>;

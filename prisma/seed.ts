@@ -63,6 +63,7 @@ async function seedSuperadmin() {
       return null;
     }
   }
+  // Bootstrap only: never overwrite password/name on an existing user.
   const user = await prisma.user.upsert({
     where: { email },
     create: {
@@ -70,7 +71,7 @@ async function seedSuperadmin() {
       passwordHash,
       name: "Platform Superadmin",
     },
-    update: { passwordHash, name: "Platform Superadmin" },
+    update: {},
   });
 
   await prisma.platformMembership.upsert({

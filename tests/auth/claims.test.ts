@@ -56,7 +56,7 @@ describe("staff login claims", () => {
     }
   });
 
-  it("issues platformRole for SUPERADMIN without requiring org", async () => {
+  it("issues platformRole for SUPERADMIN without requiring org", async (ctx) => {
     try {
       ({ hashPassword } = await import("../../src/lib/password.js"));
       ({ prisma } = await import("../../src/lib/prisma.js"));
@@ -68,6 +68,7 @@ describe("staff login claims", () => {
       console.warn(
         "Skipping staff login claims test: argon2 native module blocked (Windows Application Control)."
       );
+      ctx.skip();
       return;
     }
 
