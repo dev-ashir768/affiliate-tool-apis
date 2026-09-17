@@ -1,7 +1,7 @@
 # Phase 8 Slice 1 — Fixture-based Playwright Shop Verify
 
 Date: 2026-09-18  
-Status: Awaiting user review  
+Status: Approved  
 Scope: APIs worker + portal shops UX (no live TikTok, no IMAP)  
 Stack: BullMQ `shop-verify`, Playwright Chromium (optional), AES vault, Next portal BFF  
 

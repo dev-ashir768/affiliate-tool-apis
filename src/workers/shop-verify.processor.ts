@@ -1,7 +1,8 @@
-import { Worker, type Job } from "bullmq";
+import { UnrecoverableError, Worker, type Job } from "bullmq";
 import { prisma } from "../lib/prisma.js";
 import { bullConnection, SHOP_VERIFY_QUEUE } from "../lib/queue.js";
 import { runPlaywrightVerify } from "./shop-verify.playwright.scaffold.js";
+import { isShopVerifyTerminalError } from "./shop-verify.errors.js";
 import { logger } from "../lib/logger.js";
 
 export type ShopVerifyJobData = {
@@ -130,6 +131,9 @@ export async function processShopVerify(job: Job<ShopVerifyJobData>) {
       where: { id: verificationJobId },
       data: { status: "FAILED", lastError: message },
     });
+    if (isShopVerifyTerminalError(err)) {
+      throw new UnrecoverableError(message);
+    }
     throw err;
   }
 }

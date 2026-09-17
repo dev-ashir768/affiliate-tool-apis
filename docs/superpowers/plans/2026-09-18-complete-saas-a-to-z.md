@@ -101,12 +101,12 @@
 
 ## Phase 8 — Real shop verify
 
-- [ ] Bot inbox monitoring design (IMAP or provider webhook)
-- [ ] Playwright: TikTok Shop invite accept flow (region US/UK)
-- [ ] Encrypted session vault write on success
-- [ ] Failure taxonomy + retry in BullMQ
-- [ ] Portal: live job progress (already polls shop status — extend error messages)
-- [ ] Feature flag: `SHOP_VERIFY_MODE=stub|playwright`
+- [ ] Bot inbox monitoring design (IMAP or provider webhook) — Slice 3
+- [ ] Playwright: TikTok Shop invite accept flow (region US/UK) — Slice 2 (live)
+- [x] Fixture Playwright invite-accept + encrypted session vault (Slice 1)
+- [x] Failure taxonomy + UnrecoverableError for terminal invite failures (Slice 1)
+- [x] Portal: statusReason, verify toasts, copy bot email after connect (Slice 1)
+- [x] Feature flag: `SHOP_VERIFY_MODE=stub|playwright` (+ dry-run + fixture URL)
 - [ ] Commit per vertical slice; never commit secrets
 
 ---

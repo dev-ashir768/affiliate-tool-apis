@@ -1,16 +1,88 @@
+import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { env } from "../config/env.js";
 import { logger } from "../lib/logger.js";
 import { prisma } from "../lib/prisma.js";
 import { encryptVault } from "../lib/crypto.js";
-import { AppError } from "../lib/errors.js";
+import { ShopVerifyTerminalError } from "./shop-verify.errors.js";
 import type { ShopVerifyJobData } from "./shop-verify.processor.js";
+
+type PlaywrightPage = {
+  goto: (
+    url: string,
+    opts?: { waitUntil?: string; timeout?: number }
+  ) => Promise<unknown>;
+  click: (selector: string, opts?: { timeout?: number }) => Promise<void>;
+  evaluate: <T>(fn: () => T) => Promise<T>;
+  close: () => Promise<void>;
+};
+
+type PlaywrightContext = {
+  newPage: () => Promise<PlaywrightPage>;
+  storageState: () => Promise<unknown>;
+  close: () => Promise<void>;
+};
+
+type PlaywrightBrowser = {
+  newContext: () => Promise<PlaywrightContext>;
+  close: () => Promise<void>;
+};
+
+type PlaywrightChromium = {
+  launch: (opts?: { headless?: boolean }) => Promise<PlaywrightBrowser>;
+};
+
+function defaultFixtureHref(): string {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const fixturePath = path.resolve(
+    here,
+    "../../fixtures/shop-verify/invite-accept.html"
+  );
+  return pathToFileURL(fixturePath).href;
+}
+
+export function buildFixtureUrl(opts: {
+  shopId: string;
+  region: string;
+  auto?: "accept" | "reject" | "expire";
+}): string {
+  const base = (env.SHOP_VERIFY_FIXTURE_URL?.trim() || defaultFixtureHref()).replace(
+    /\/$/,
+    ""
+  );
+  const url = new URL(base);
+  url.searchParams.set("shopId", opts.shopId);
+  url.searchParams.set("region", opts.region);
+  if (opts.auto) url.searchParams.set("auto", opts.auto);
+  return url.href;
+}
+
+async function readOutcome(page: PlaywrightPage): Promise<string | null> {
+  return page.evaluate(() => {
+    const el = document.body as HTMLElement | null;
+    return el?.dataset?.verifyResult ?? null;
+  });
+}
+
+async function waitForOutcome(
+  page: PlaywrightPage,
+  timeoutMs: number
+): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const outcome = await readOutcome(page);
+    if (outcome) return outcome;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  throw new ShopVerifyTerminalError("VERIFY_TIMEOUT");
+}
 
 /**
  * Playwright shop verify.
  * - Default: dry-run activates the shop (same outcome as stub) so PLAYWRIGHT mode
  *   is usable without TikTok credentials.
- * - Set PLAYWRIGHT_SHOP_VERIFY_DRY_RUN=false and install `playwright` to run a
- *   real Chromium session that stores a vaulted session placeholder.
+ * - Set PLAYWRIGHT_SHOP_VERIFY_DRY_RUN=false and install `playwright` to run Chromium
+ *   against the local invite-accept fixture and vault storageState.
  */
 export async function runPlaywrightVerify(data: ShopVerifyJobData): Promise<void> {
   const { shopId, verificationJobId } = data;
@@ -28,44 +100,71 @@ export async function runPlaywrightVerify(data: ShopVerifyJobData): Promise<void
     return;
   }
 
-  let chromium: {
-    launch: (opts?: { headless?: boolean }) => Promise<{
-      newPage: () => Promise<{
-        goto: (url: string, opts?: { waitUntil?: string; timeout?: number }) => Promise<unknown>;
-        title: () => Promise<string>;
-        close: () => Promise<void>;
-      }>;
-      close: () => Promise<void>;
-    }>;
-  };
+  const shop = await prisma.shop.findUniqueOrThrow({ where: { id: shopId } });
 
+  let chromium: PlaywrightChromium;
   try {
     const playwright = await import("playwright");
-    chromium = playwright.chromium;
+    chromium = playwright.chromium as unknown as PlaywrightChromium;
   } catch {
-    throw new AppError(
-      "INTERNAL",
-      "playwright package is not installed; set PLAYWRIGHT_SHOP_VERIFY_DRY_RUN=true or npm i -D playwright",
-      501
-    );
+    throw new ShopVerifyTerminalError("PLAYWRIGHT_MISSING");
   }
+
+  const fixtureUrl = buildFixtureUrl({
+    shopId,
+    region: shop.region,
+    auto: "accept",
+  });
 
   const browser = await chromium.launch({ headless: true });
   try {
-    const page = await browser.newPage();
-    await page.goto("about:blank", { waitUntil: "domcontentloaded", timeout: 15_000 });
-    const title = await page.title();
-    await page.close();
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    try {
+      await page.goto(fixtureUrl, {
+        waitUntil: "domcontentloaded",
+        timeout: 15_000,
+      });
 
-    await activateShopAfterVerify(shopId, verificationJobId, {
-      sessionVaultCiphertext: encryptVault(
-        JSON.stringify({
-          mode: "playwright",
-          title,
-          verifiedAt: new Date().toISOString(),
-        })
-      ),
-    });
+      let outcome = await readOutcome(page);
+      if (!outcome) {
+        await page.click("#btn-accept", { timeout: 10_000 });
+        outcome = await waitForOutcome(page, 10_000);
+      }
+
+      if (outcome === "rejected") {
+        throw new ShopVerifyTerminalError("INVITE_REJECTED");
+      }
+      if (outcome === "expired") {
+        throw new ShopVerifyTerminalError("INVITE_EXPIRED");
+      }
+      if (outcome !== "accepted") {
+        throw new ShopVerifyTerminalError("VERIFY_TIMEOUT");
+      }
+
+      const storageState = await context.storageState();
+      await activateShopAfterVerify(shopId, verificationJobId, {
+        sessionVaultCiphertext: encryptVault(
+          JSON.stringify({
+            mode: "playwright",
+            region: shop.region,
+            storageState,
+            verifiedAt: new Date().toISOString(),
+            fixture: true,
+          })
+        ),
+      });
+    } finally {
+      await page.close().catch(() => undefined);
+      await context.close().catch(() => undefined);
+    }
+  } catch (err) {
+    if (err instanceof ShopVerifyTerminalError) throw err;
+    const message = err instanceof Error ? err.message : "verify failed";
+    if (/timeout/i.test(message)) {
+      throw new ShopVerifyTerminalError("VERIFY_TIMEOUT", message);
+    }
+    throw err;
   } finally {
     await browser.close();
   }

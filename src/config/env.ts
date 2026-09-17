@@ -24,6 +24,8 @@ const schema = z.object({
     .enum(["true", "false", "1", "0"])
     .default("true")
     .transform((v) => v === "true" || v === "1"),
+  /** Override fixture URL for Playwright verify (file:// or http://). Empty = packaged fixture. */
+  SHOP_VERIFY_FIXTURE_URL: z.string().optional(),
   PASSWORD_RESET_TTL_SEC: z.coerce.number().default(3600),
   INVITE_TTL_SEC: z.coerce.number().default(604800),
   PLATFORM_SUPERADMIN_EMAIL: z.string().email().optional(),

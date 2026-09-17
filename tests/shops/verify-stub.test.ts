@@ -11,7 +11,6 @@ import {
   processShopVerify,
   type ShopVerifyJobData,
 } from "../../src/workers/shop-verify.processor.js";
-import { runPlaywrightVerify } from "../../src/workers/shop-verify.playwright.scaffold.js";
 import { shopVerifyQueue } from "../../src/lib/queue.js";
 import { redis } from "../../src/lib/redis.js";
 
@@ -223,17 +222,6 @@ describe("shop verify stub", () => {
       addSpy.mockRestore();
     }
   }, 60000);
-
-  it("Playwright scaffold throws NOT_IMPLEMENTED", async () => {
-    await expect(
-      runPlaywrightVerify({
-        shopId: "x",
-        organizationId: "y",
-        mode: "PLAYWRIGHT",
-        verificationJobId: "z",
-      })
-    ).rejects.toMatchObject({ code: "NOT_IMPLEMENTED" });
-  });
 
   it("HTTP POST /shops/:id/verify enqueues verify", async () => {
     const shop = await connectShop({ organizationId: orgId, region: "UK" });

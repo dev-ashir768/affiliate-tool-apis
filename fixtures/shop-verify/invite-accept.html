@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Tiksly Shop Verify Fixture</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        max-width: 28rem;
+        margin: 3rem auto;
+        padding: 0 1rem;
+        color: #111;
+      }
+      button {
+        display: block;
+        width: 100%;
+        margin: 0.5rem 0;
+        padding: 0.75rem 1rem;
+        font-size: 1rem;
+        cursor: pointer;
+      }
+      #meta {
+        color: #555;
+        font-size: 0.875rem;
+        margin-bottom: 1.25rem;
+      }
+      #result {
+        margin-top: 1rem;
+        font-weight: 600;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Invite accept (fixture)</h1>
+    <p id="meta"></p>
+    <button type="button" id="btn-accept" data-action="accept">Accept invite</button>
+    <button type="button" id="btn-reject" data-action="reject">Reject invite</button>
+    <button type="button" id="btn-expire" data-action="expire">Mark expired</button>
+    <p id="result" aria-live="polite"></p>
+    <script>
+      const params = new URLSearchParams(location.search);
+      const shopId = params.get("shopId") || "";
+      const region = params.get("region") || "";
+      const auto = (params.get("auto") || "").toLowerCase();
+      document.getElementById("meta").textContent =
+        "shopId=" + shopId + " · region=" + region;
+
+      function finish(action) {
+        document.cookie =
+          "tiksly_verify=" +
+          encodeURIComponent(action) +
+          "; path=/; SameSite=Lax";
+        try {
+          localStorage.setItem(
+            "tiksly_verify",
+            JSON.stringify({ action, shopId, region, at: Date.now() })
+          );
+        } catch (_) {}
+        document.body.dataset.verifyResult = action;
+        document.getElementById("result").textContent = "Result: " + action;
+      }
+
+      document.getElementById("btn-accept").onclick = () => finish("accepted");
+      document.getElementById("btn-reject").onclick = () => finish("rejected");
+      document.getElementById("btn-expire").onclick = () => finish("expired");
+
+      if (auto === "accept" || auto === "accepted") finish("accepted");
+      if (auto === "reject" || auto === "rejected") finish("rejected");
+      if (auto === "expire" || auto === "expired") finish("expired");
+    </script>
+  </body>
+</html>
