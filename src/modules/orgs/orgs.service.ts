@@ -5,7 +5,7 @@ import { AppError } from "../../lib/errors.js";
 import { sha256 } from "../../lib/crypto.js";
 import { hashPassword } from "../../lib/password.js";
 import { env } from "../../config/env.js";
-import { getEmailProvider } from "../../lib/email.js";
+import { sendOrgInviteEmail } from "../../lib/email.js";
 
 function portalOrigin(): string {
   const origin =
@@ -13,18 +13,18 @@ function portalOrigin(): string {
   return origin.replace(/\/$/, "");
 }
 
-async function sendOrgInviteEmail(input: {
+async function notifyOrgInvite(input: {
   email: string;
   inviteToken: string;
   organizationName: string;
   role: string;
 }) {
   const inviteUrl = `${portalOrigin()}/invite/${input.inviteToken}`;
-  await getEmailProvider().send({
+  await sendOrgInviteEmail({
     to: input.email,
-    subject: `You're invited to ${input.organizationName} on Tiksly`,
-    text: `You've been invited as ${input.role} to ${input.organizationName}.\n\nAccept: ${inviteUrl}`,
-    html: `<p>You've been invited as <strong>${input.role}</strong> to <strong>${input.organizationName}</strong>.</p><p><a href="${inviteUrl}">Accept invite</a></p>`,
+    inviteUrl,
+    organizationName: input.organizationName,
+    role: input.role,
   });
 }
 
@@ -229,7 +229,7 @@ export async function createInvite(input: {
       },
     });
 
-    await sendOrgInviteEmail({
+    await notifyOrgInvite({
       email,
       inviteToken: raw,
       organizationName: org.name,
@@ -277,7 +277,7 @@ export async function createInvite(input: {
         },
       });
 
-  await sendOrgInviteEmail({
+  await notifyOrgInvite({
     email,
     inviteToken: raw,
     organizationName: org.name,

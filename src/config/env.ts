@@ -30,7 +30,18 @@ const schema = z.object({
   PLATFORM_SUPERADMIN_PASSWORD: z.string().min(8).optional(),
   /** Precomputed argon2id hash; use when native argon2 cannot run (e.g. blocked on Windows). */
   PLATFORM_SUPERADMIN_PASSWORD_HASH: z.string().min(1).optional(),
-  EMAIL_PROVIDER: z.enum(["console", "resend"]).default("console"),
+  /** console = log only; smtp = nodemailer */
+  EMAIL_PROVIDER: z.enum(["console", "smtp", "resend"]).default("console"),
+  EMAIL_FROM: z.string().optional(),
+  EMAIL_LOGO_URL: z.string().url().optional(),
+  SMTP_HOST: z.string().optional(),
+  SMTP_PORT: z.coerce.number().int().default(587),
+  SMTP_SECURE: z
+    .enum(["true", "false", "1", "0"])
+    .default("false")
+    .transform((v) => v === "true" || v === "1"),
+  SMTP_USER: z.string().optional(),
+  SMTP_PASS: z.string().optional(),
   RESEND_API_KEY: z.string().optional(),
 });
 

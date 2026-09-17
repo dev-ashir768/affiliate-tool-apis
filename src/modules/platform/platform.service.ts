@@ -8,6 +8,8 @@ import { AppError } from "../../lib/errors.js";
 import { hashPassword } from "../../lib/password.js";
 import { writeAuditLog } from "../../lib/audit.js";
 import { encryptVault } from "../../lib/crypto.js";
+import { sendStaffWelcomeEmail } from "../../lib/email.js";
+import { logger } from "../../lib/logger.js";
 
 export type ListParams = {
   page: number;
@@ -117,6 +119,13 @@ export async function createStaff(input: {
       entityId: membership.id,
       meta: { email, role: input.role, existingUser: true },
     });
+    await sendStaffWelcomeEmail({
+      to: email,
+      name: existing.name,
+      role: input.role,
+    }).catch((err) => {
+      logStaffEmailFailure(err);
+    });
     return toStaff(membership);
   }
 
@@ -145,7 +154,22 @@ export async function createStaff(input: {
     entityId: membership.id,
     meta: { email, role: input.role },
   });
+  await sendStaffWelcomeEmail({
+    to: email,
+    name: input.name.trim(),
+    role: input.role,
+    temporaryPassword: input.password,
+  }).catch((err) => {
+    logStaffEmailFailure(err);
+  });
   return toStaff(membership);
+}
+
+function logStaffEmailFailure(err: unknown) {
+  logger.error(
+    "staff welcome email failed",
+    err instanceof Error ? { message: err.message } : { err: String(err) },
+  );
 }
 
 export async function patchStaff(
