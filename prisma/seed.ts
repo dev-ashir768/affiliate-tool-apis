@@ -210,11 +210,19 @@ async function main() {
       allowedPlatformRoles: [PlatformRole.SUPERADMIN, PlatformRole.FINANCE],
     },
     {
+      key: "audit",
+      label: "Audit",
+      href: "/backoffice/audit",
+      icon: "ScrollText",
+      sortOrder: 4,
+      allowedPlatformRoles: [PlatformRole.SUPERADMIN],
+    },
+    {
       key: "proxies",
       label: "Proxies",
       href: "/backoffice/proxies",
       icon: "Globe",
-      sortOrder: 4,
+      sortOrder: 5,
       allowedPlatformRoles: [PlatformRole.SUPERADMIN, PlatformRole.OPS],
     },
     {
@@ -222,7 +230,7 @@ async function main() {
       label: "Crawler",
       href: "/backoffice/crawler",
       icon: "Bot",
-      sortOrder: 5,
+      sortOrder: 6,
       allowedPlatformRoles: [PlatformRole.SUPERADMIN, PlatformRole.OPS],
     },
   ]);
