@@ -20,6 +20,8 @@ const schema = z.object({
   STRIPE_WEBHOOK_SECRET: z.string().optional(),
   SHOP_VERIFY_MODE: z.enum(["stub", "playwright"]).default("stub"),
   INVITE_TTL_SEC: z.coerce.number().default(604800),
+  PLATFORM_SUPERADMIN_EMAIL: z.string().email().optional(),
+  PLATFORM_SUPERADMIN_PASSWORD: z.string().min(8).optional(),
 });
 
 export type Env = z.infer<typeof schema>;
