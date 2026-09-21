@@ -1,0 +1,109 @@
+{
+  "id": "tiksly-affiliate-env-local",
+  "name": "Tiksly — Local",
+  "values": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:4000",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "accessToken",
+      "value": "",
+      "type": "secret",
+      "enabled": true
+    },
+    {
+      "key": "refreshToken",
+      "value": "",
+      "type": "secret",
+      "enabled": true
+    },
+    {
+      "key": "shopId",
+      "value": "",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "inviteToken",
+      "value": "",
+      "type": "secret",
+      "enabled": true
+    },
+    {
+      "key": "planCode",
+      "value": "starter",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "creatorId",
+      "value": "",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "listId",
+      "value": "",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "campaignId",
+      "value": "",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "templateId",
+      "value": "",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "discoveryId",
+      "value": "",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "orgId",
+      "value": "",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "staffId",
+      "value": "",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "proxyId",
+      "value": "",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "navItemId",
+      "value": "",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "navSectionId",
+      "value": "",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "resetToken",
+      "value": "",
+      "type": "secret",
+      "enabled": true
+    }
+  ],
+  "_postman_variable_scope": "environment"
+}

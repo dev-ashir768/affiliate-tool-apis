@@ -303,39 +303,6 @@ async function main() {
 
   const superadminEmail = await seedSuperadmin();
 
-  // Sample discovery profiles for local / staging demos (idempotent upsert)
-  for (const p of [
-    {
-      handle: "demo_creator_us",
-      displayName: "Demo US Creator",
-      region: "US" as const,
-      followerCount: 125000,
-    },
-    {
-      handle: "demo_creator_uk",
-      displayName: "Demo UK Creator",
-      region: "UK" as const,
-      followerCount: 88000,
-    },
-  ]) {
-    await prisma.creatorDiscoveryProfile.upsert({
-      where: {
-        platform_handle: { platform: "TIKTOK", handle: p.handle },
-      },
-      create: {
-        ...p,
-        categories: ["beauty", "lifestyle"],
-        source: "seed",
-        enabled: true,
-      },
-      update: {
-        displayName: p.displayName,
-        followerCount: p.followerCount,
-        enabled: true,
-      },
-    });
-  }
-
   const [sectionCount, itemCount, membershipCount] = await Promise.all([
     prisma.navSection.count(),
     prisma.navItem.count(),
