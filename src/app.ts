@@ -13,6 +13,14 @@ import {
 import { shopsRoutes } from "./modules/shops/shops.routes.js";
 import { creatorsRoutes } from "./modules/creators/creators.routes.js";
 import { outreachRoutes } from "./modules/outreach/outreach.routes.js";
+import {
+  discoveryRoutes,
+  platformDiscoveryRoutes,
+} from "./modules/discovery/discovery.routes.js";
+import {
+  analyticsRoutes,
+  ordersRoutes,
+} from "./modules/orders/orders.routes.js";
 import { navigationRoutes } from "./modules/navigation/navigation.routes.js";
 import { platformRoutes } from "./modules/platform/platform.routes.js";
 
@@ -42,8 +50,12 @@ export function createApp() {
   app.use("/api/v1/shops", shopsRoutes);
   app.use("/api/v1/creators", creatorsRoutes);
   app.use("/api/v1/outreach", outreachRoutes);
+  app.use("/api/v1/discovery", discoveryRoutes);
+  app.use("/api/v1/orders", ordersRoutes);
+  app.use("/api/v1/analytics", analyticsRoutes);
   app.use("/api/v1/navigation", navigationRoutes);
   app.use("/api/v1/platform", platformRoutes);
+  app.use("/api/v1/platform/discovery", platformDiscoveryRoutes);
   app.use(errorHandler);
   return app;
 }

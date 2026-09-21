@@ -120,6 +120,19 @@ enum OutreachStatus {
   FAILED
 }
 
+enum OrderStatus {
+  PENDING
+  PAID
+  REFUNDED
+  CANCELED
+}
+
+enum CommissionStatus {
+  PENDING
+  APPROVED
+  PAID
+}
+
 model User {
   id           String         @id @default(cuid())
   email        String         @unique
@@ -169,6 +182,8 @@ model Organization {
   campaigns        Campaign[]
   outreachTemplates OutreachTemplate[]
   outreachMessages  OutreachMessage[]
+  shopOrders       ShopOrder[]
+  commissions      Commission[]
 }
 
 model Membership {
@@ -236,6 +251,7 @@ model Shop {
   sessionVaultCiphertext String?
   verifiedAt             DateTime?
   verificationJobs       ShopVerificationJob[]
+  shopOrders             ShopOrder[]
   createdAt              DateTime     @default(now())
   updatedAt              DateTime     @updatedAt
 
@@ -364,6 +380,8 @@ model Creator {
   stage          CreatorStage    @default(LEAD)
   listMembers    CreatorListMember[]
   outreachMessages OutreachMessage[]
+  shopOrders     ShopOrder[]
+  commissions    Commission[]
   createdAt      DateTime        @default(now())
   updatedAt      DateTime        @updatedAt
 
@@ -452,5 +470,69 @@ model OutreachMessage {
   @@index([organizationId])
   @@index([creatorId])
   @@index([campaignId])
+  @@index([status])
+}
+
+/// Platform-wide creator index. Populated by staff import/manual — not live TikTok scrape.
+model CreatorDiscoveryProfile {
+  id            String          @id @default(cuid())
+  platform      CreatorPlatform @default(TIKTOK)
+  handle        String
+  displayName   String?
+  region        ShopRegion?
+  followerCount Int?
+  categories    String[]
+  bio           String?
+  source        String          @default("manual")
+  enabled       Boolean         @default(true)
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  @@unique([platform, handle])
+  @@index([region])
+  @@index([followerCount])
+  @@index([enabled])
+}
+
+model ShopOrder {
+  id              String       @id @default(cuid())
+  organizationId  String
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  shopId          String?
+  shop            Shop?        @relation(fields: [shopId], references: [id], onDelete: SetNull)
+  creatorId       String?
+  creator         Creator?     @relation(fields: [creatorId], references: [id], onDelete: SetNull)
+  externalOrderId String
+  gmvCents        Int
+  currency        String       @default("USD")
+  status          OrderStatus  @default(PENDING)
+  orderedAt       DateTime
+  commissions     Commission[]
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  @@unique([organizationId, externalOrderId])
+  @@index([organizationId])
+  @@index([creatorId])
+  @@index([orderedAt])
+  @@index([status])
+}
+
+model Commission {
+  id             String           @id @default(cuid())
+  organizationId String
+  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  orderId        String
+  order          ShopOrder        @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  creatorId      String?
+  creator        Creator?         @relation(fields: [creatorId], references: [id], onDelete: SetNull)
+  amountCents    Int
+  status         CommissionStatus @default(PENDING)
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  @@index([organizationId])
+  @@index([orderId])
+  @@index([creatorId])
   @@index([status])
 }

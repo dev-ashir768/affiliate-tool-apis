@@ -164,33 +164,54 @@ async function main() {
       sortOrder: 2,
     },
     {
+      key: "discover",
+      label: "Discover",
+      href: "/discover",
+      icon: "Search",
+      sortOrder: 3,
+    },
+    {
       key: "campaigns",
       label: "Campaigns",
       href: "/campaigns",
       icon: "Megaphone",
-      sortOrder: 3,
+      sortOrder: 4,
     },
     {
       key: "outreach",
       label: "Outreach",
       href: "/outreach",
       icon: "Mail",
-      sortOrder: 4,
+      sortOrder: 5,
     },
-    { key: "team", label: "Team", href: "/team", icon: "Users", sortOrder: 5 },
+    {
+      key: "orders",
+      label: "Orders",
+      href: "/orders",
+      icon: "ShoppingCart",
+      sortOrder: 6,
+    },
+    {
+      key: "analytics",
+      label: "Analytics",
+      href: "/analytics",
+      icon: "BarChart3",
+      sortOrder: 7,
+    },
+    { key: "team", label: "Team", href: "/team", icon: "Users", sortOrder: 8 },
     {
       key: "billing",
       label: "Billing",
       href: "/billing",
       icon: "CreditCard",
-      sortOrder: 6,
+      sortOrder: 9,
     },
     {
       key: "settings",
       label: "Settings",
       href: "/settings",
       icon: "Settings",
-      sortOrder: 7,
+      sortOrder: 10,
     },
   ]);
 
@@ -231,11 +252,19 @@ async function main() {
       allowedPlatformRoles: [PlatformRole.SUPERADMIN, PlatformRole.OPS],
     },
     {
+      key: "discovery",
+      label: "Discovery",
+      href: "/backoffice/discovery",
+      icon: "Search",
+      sortOrder: 4,
+      allowedPlatformRoles: [PlatformRole.SUPERADMIN, PlatformRole.OPS],
+    },
+    {
       key: "finance",
       label: "Finance",
       href: "/backoffice/finance",
       icon: "BadgeDollarSign",
-      sortOrder: 4,
+      sortOrder: 5,
       allowedPlatformRoles: [PlatformRole.SUPERADMIN, PlatformRole.FINANCE],
     },
     {
@@ -243,7 +272,7 @@ async function main() {
       label: "Audit",
       href: "/backoffice/audit",
       icon: "ScrollText",
-      sortOrder: 5,
+      sortOrder: 6,
       allowedPlatformRoles: [PlatformRole.SUPERADMIN],
     },
     {
@@ -251,7 +280,7 @@ async function main() {
       label: "Proxies",
       href: "/backoffice/proxies",
       icon: "Globe",
-      sortOrder: 6,
+      sortOrder: 7,
       allowedPlatformRoles: [PlatformRole.SUPERADMIN, PlatformRole.OPS],
     },
     {
@@ -259,7 +288,7 @@ async function main() {
       label: "Crawler",
       href: "/backoffice/crawler",
       icon: "Bot",
-      sortOrder: 7,
+      sortOrder: 8,
       allowedPlatformRoles: [PlatformRole.SUPERADMIN, PlatformRole.OPS],
     },
     {
@@ -267,12 +296,45 @@ async function main() {
       label: "Navigation",
       href: "/backoffice/navigation",
       icon: "Menu",
-      sortOrder: 8,
+      sortOrder: 9,
       allowedPlatformRoles: [PlatformRole.SUPERADMIN],
     },
   ]);
 
   const superadminEmail = await seedSuperadmin();
+
+  // Sample discovery profiles for local / staging demos (idempotent upsert)
+  for (const p of [
+    {
+      handle: "demo_creator_us",
+      displayName: "Demo US Creator",
+      region: "US" as const,
+      followerCount: 125000,
+    },
+    {
+      handle: "demo_creator_uk",
+      displayName: "Demo UK Creator",
+      region: "UK" as const,
+      followerCount: 88000,
+    },
+  ]) {
+    await prisma.creatorDiscoveryProfile.upsert({
+      where: {
+        platform_handle: { platform: "TIKTOK", handle: p.handle },
+      },
+      create: {
+        ...p,
+        categories: ["beauty", "lifestyle"],
+        source: "seed",
+        enabled: true,
+      },
+      update: {
+        displayName: p.displayName,
+        followerCount: p.followerCount,
+        enabled: true,
+      },
+    });
+  }
 
   const [sectionCount, itemCount, membershipCount] = await Promise.all([
     prisma.navSection.count(),

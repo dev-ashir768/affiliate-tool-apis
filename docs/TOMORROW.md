@@ -1,21 +1,24 @@
-# Tomorrow / deferred work
+# Deferred / next work
 
-Date noted: 2026-09-18  
-Do these next session — not blocking current backoffice creators module.
+Updated: 2026-09-21
 
-## Tomorrow (recommended order)
+## Still needs credentials / ops (not code blockers)
 
-1. **Live Seller Center URLs** — set `SHOP_VERIFY_LIVE_URL_US/UK` + real accept selectors; smoke one US/UK verify with `SHOP_VERIFY_TARGET=live`
-2. **IMAP bot inbox** — configure real IMAP, test invite email gate before live verify
-3. **Creator discovery** — crawl index or partner API design (no fake TikTok APIs); feed into merchant CRM + backoffice
-4. **Attribution** — orders/commission sync replacing Products/Orders placeholders
-5. **Analytics funnel** — invite → accept → order GMV
-6. **Sentry package** — `npm i @sentry/node` in prod + wire request handler if needed
-7. **CI secrets** — optional vitest job with staging `DATABASE_URL`
+1. **Live Seller Center URLs** — set `SHOP_VERIFY_LIVE_URL_US/UK` + accept selectors; smoke `SHOP_VERIFY_TARGET=live`
+2. **IMAP bot inbox** — real IMAP_* + `BOT_INBOX_PROVIDER=imap`
+3. **Sentry** — `npm i @sentry/node` in prod with `SENTRY_DSN`
+4. **CI vitest** — optional job with staging `DATABASE_URL`
 
-## Done today (context)
+## Next product slices (after discovery/attribution land)
 
-- SaaS ops + shop verify fixture/live flags + inbox adapter
-- Merchant Creators / Campaigns / Outreach
-- Backoffice Creators (staff add into any org) — this branch
-- Operator runbook + GitHub typecheck CI
+1. Partner TikTok/commerce sync into `ShopOrder` (replace manual ingest)
+2. Automated discovery crawl (replace staff-built `CreatorDiscoveryProfile` index)
+3. Products catalog sync (still placeholder page)
+4. Outreach sequences / multi-touch automation
+
+## Shipped 2026-09-21
+
+- Creator discovery index + merchant `/discover` + save-to-CRM
+- Backoffice `/backoffice/discovery`
+- Orders + commissions attribution + `/orders`
+- Analytics funnel overview + `/analytics`
