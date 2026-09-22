@@ -2,6 +2,7 @@ import { Router } from "express";
 import { AppError } from "../../lib/errors.js";
 import { validateBody, validateQuery } from "../../middleware/validate.js";
 import { authenticate } from "../../middleware/authenticate.js";
+import { requirePaidAccess } from "../../middleware/require-paid-access.js";
 import { requireOrg } from "../../middleware/require-org.js";
 import { requireRole } from "../../middleware/require-role.js";
 import { requirePlatform } from "../../middleware/require-platform.js";
@@ -53,6 +54,8 @@ import {
 import { reindexDiscoveryToMeili } from "../../lib/meilisearch.js";
 
 export const discoveryRoutes = Router();
+
+discoveryRoutes.use(authenticate, requireOrg, requirePaidAccess);
 
 discoveryRoutes.get(
   "/creators",

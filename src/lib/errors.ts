@@ -3,6 +3,7 @@ export type ErrorCode =
   | "FORBIDDEN"
   | "VALIDATION_ERROR"
   | "PLAN_LIMIT"
+  | "PAYMENT_REQUIRED"
   | "SHOP_NOT_READY"
   | "CONFLICT"
   | "NOT_FOUND"

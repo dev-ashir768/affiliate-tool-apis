@@ -5,6 +5,7 @@ import { validateBody } from "../../middleware/validate.js";
 import { authenticate } from "../../middleware/authenticate.js";
 import { requireOrg } from "../../middleware/require-org.js";
 import { requireRole } from "../../middleware/require-role.js";
+import { requirePaidAccess } from "../../middleware/require-paid-access.js";
 import { rateLimit, rateLimitKey } from "../../middleware/rate-limit.js";
 import { connectShopSchema } from "./shops.schemas.js";
 import {
@@ -22,6 +23,9 @@ import {
 
 export const shopsRoutes = Router();
 
+shopsRoutes.use(authenticate, requireOrg);
+shopsRoutes.use(requirePaidAccess);
+
 const oauthStartSchema = z.object({
   region: z.enum(["US", "UK"]).default("US"),
   shopId: z.string().min(1).optional().nullable(),
@@ -32,7 +36,7 @@ const oauthCompleteSchema = z.object({
   state: z.string().min(1),
 });
 
-shopsRoutes.get("/", authenticate, requireOrg, async (req, res, next) => {
+shopsRoutes.get("/", async (req, res, next) => {
   try {
     if (!req.auth?.orgId) {
       throw new AppError("UNAUTHORIZED", "Missing access token", 401);

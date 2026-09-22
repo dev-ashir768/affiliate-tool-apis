@@ -103,6 +103,7 @@ export async function getCurrent(organizationId: string) {
     slug: org.slug,
     seatLimit: org.seatLimit,
     shopLimit: org.shopLimit,
+    botLimit: org.botLimit,
     dailyInviteQuota: org.dailyInviteQuota,
     plan: {
       id: org.plan.id,
@@ -128,6 +129,7 @@ export async function patchCurrent(
     slug: org.slug,
     seatLimit: org.seatLimit,
     shopLimit: org.shopLimit,
+    botLimit: org.botLimit,
     dailyInviteQuota: org.dailyInviteQuota,
     plan: {
       id: org.plan.id,

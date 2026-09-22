@@ -1,5 +1,6 @@
 import { Router, type RequestHandler } from "express";
 import { z } from "zod";
+import Stripe from "stripe";
 import { prisma } from "../../lib/prisma.js";
 import { AppError } from "../../lib/errors.js";
 import { env } from "../../config/env.js";
@@ -12,6 +13,7 @@ import { handleStripeEvent } from "./webhook.service.js";
 import {
   createCheckoutSession,
   createPortalSession,
+  getBillingOverview,
   listPlans,
 } from "./billing.service.js";
 
@@ -29,6 +31,22 @@ billingRoutes.get("/plans", async (_req, res, next) => {
     next(err);
   }
 });
+
+billingRoutes.get(
+  "/overview",
+  authenticate,
+  requireOrg,
+  async (req, res, next) => {
+    try {
+      if (!req.auth?.orgId) {
+        throw new AppError("UNAUTHORIZED", "Missing access token", 401);
+      }
+      res.json(await getBillingOverview(req.auth.orgId));
+    } catch (err) {
+      next(err);
+    }
+  },
+);
 
 billingRoutes.post(
   "/checkout-session",
@@ -48,12 +66,13 @@ billingRoutes.post(
         organizationId: req.auth.orgId,
         planCode: req.body.planCode,
         actorEmail: user.email,
+        actorUserId: req.auth.sub,
       });
       res.json(session);
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 billingRoutes.post(
@@ -73,27 +92,53 @@ billingRoutes.post(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
+/**
+ * Stripe webhook — must be mounted with express.raw() before express.json().
+ * See createApp() in app.ts.
+ */
 export const billingWebhookHandler: RequestHandler = async (req, res, next) => {
   try {
     if (!env.STRIPE_WEBHOOK_SECRET) {
-      throw new AppError("INTERNAL", "Stripe webhook secret is not configured", 500);
+      throw new AppError(
+        "INTERNAL",
+        "Stripe webhook secret is not configured",
+        500,
+      );
     }
     const signature = req.headers["stripe-signature"];
     if (!signature || typeof signature !== "string") {
       throw new AppError("UNAUTHORIZED", "Missing Stripe signature", 401);
     }
 
-    const stripe = getStripe();
-    const event = stripe.webhooks.constructEvent(
-      req.body,
-      signature,
-      env.STRIPE_WEBHOOK_SECRET
-    );
+    const rawBody = req.body;
+    if (!Buffer.isBuffer(rawBody) && typeof rawBody !== "string") {
+      throw new AppError(
+        "VALIDATION_ERROR",
+        "Stripe webhook requires raw request body",
+        400,
+      );
+    }
 
-    await handleStripeEvent(event as any);
+    const stripe = getStripe();
+    let event: Stripe.Event;
+    try {
+      event = stripe.webhooks.constructEvent(
+        rawBody,
+        signature,
+        env.STRIPE_WEBHOOK_SECRET,
+      );
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Invalid Stripe signature";
+      throw new AppError("UNAUTHORIZED", message, 401);
+    }
+
+    await handleStripeEvent(event as unknown as Parameters<
+      typeof handleStripeEvent
+    >[0]);
     res.json({ received: true });
   } catch (err) {
     next(err);

@@ -8,6 +8,7 @@ import {
   signAccessToken,
   type AccessClaims,
 } from "../../lib/tokens.js";
+import { subscriptionGrantsAccess } from "../../lib/entitlements.js";
 import { sha256 } from "../../lib/crypto.js";
 import { env } from "../../config/env.js";
 import { logger } from "../../lib/logger.js";
@@ -41,8 +42,12 @@ function slugify(name: string) {
   );
 }
 
-function redirectFor(platformRole: AccessClaims["platformRole"]): string {
-  return platformRole ? "/backoffice/users" : "/home";
+function redirectFor(
+  platformRole: AccessClaims["platformRole"],
+  hasProductAccess: boolean,
+): string {
+  if (platformRole) return "/backoffice/users";
+  return hasProductAccess ? "/home" : "/onboarding";
 }
 
 type PlatformMembershipSummary = {
@@ -83,11 +88,21 @@ async function resolveAccessClaims(
     throw new AppError("FORBIDDEN", "No active organization", 403);
   }
 
+  let hasProductAccess = false;
+  if (membership) {
+    const org = await prisma.organization.findUnique({
+      where: { id: membership.organizationId },
+      include: { subscription: true },
+    });
+    hasProductAccess = subscriptionGrantsAccess(org?.subscription);
+  }
+
   const claims: AccessClaims = {
     sub: userId,
     orgId: membership?.organizationId ?? null,
     orgRole: (membership?.role as MembershipRole | undefined) ?? null,
     platformRole: (platform?.role as PlatformRole | undefined) ?? null,
+    hasProductAccess,
   };
 
   return {
@@ -142,6 +157,7 @@ export async function register(input: {
         planId: free.id,
         seatLimit: free.seatLimit,
         shopLimit: free.shopLimit,
+        botLimit: free.botLimit,
         dailyInviteQuota: free.dailyInviteQuota,
       },
     });
@@ -161,6 +177,7 @@ export async function register(input: {
     orgId: result.organization.id,
     orgRole: "OWNER",
     platformRole: null,
+    hasProductAccess: false,
   });
 
   return {
@@ -171,7 +188,7 @@ export async function register(input: {
       slug: result.organization.slug,
     },
     platformMembership: null,
-    redirectTo: redirectFor(null),
+    redirectTo: redirectFor(null, false),
     ...session,
   };
 }
@@ -192,7 +209,7 @@ export async function login(input: { email: string; password: string }) {
     user: { id: user.id, email: user.email, name: user.name },
     organizationId: claims.orgId,
     platformMembership,
-    redirectTo: redirectFor(claims.platformRole),
+    redirectTo: redirectFor(claims.platformRole, claims.hasProductAccess),
     ...session,
   };
 }
@@ -255,10 +272,25 @@ export async function getMe(userId: string, orgId: string | null) {
         planCode: m.organization.plan.code,
         seatLimit: m.organization.seatLimit,
         shopLimit: m.organization.shopLimit,
+        botLimit: m.organization.botLimit,
         subscriptionStatus: m.organization.subscription?.status ?? null,
+        hasProductAccess: subscriptionGrantsAccess(m.organization.subscription),
+        currentPeriodEnd:
+          m.organization.subscription?.currentPeriodEnd?.toISOString() ?? null,
       },
     })),
-    redirectTo: redirectFor(platformMembership?.role ?? null),
+    redirectTo: redirectFor(
+      platformMembership?.role ?? null,
+      orgId
+        ? memberships.some(
+            (m) =>
+              m.organization.id === orgId &&
+              subscriptionGrantsAccess(m.organization.subscription),
+          )
+        : memberships.some((m) =>
+            subscriptionGrantsAccess(m.organization.subscription),
+          ),
+    ),
   };
 }
 

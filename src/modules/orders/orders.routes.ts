@@ -2,6 +2,7 @@ import { Router } from "express";
 import { AppError } from "../../lib/errors.js";
 import { validateBody } from "../../middleware/validate.js";
 import { authenticate } from "../../middleware/authenticate.js";
+import { requirePaidAccess } from "../../middleware/require-paid-access.js";
 import { requireOrg } from "../../middleware/require-org.js";
 import { requireRole } from "../../middleware/require-role.js";
 import { createOrderSchema, syncOrdersSchema } from "../discovery/discovery.schemas.js";
@@ -13,6 +14,8 @@ import {
 } from "./orders.service.js";
 
 export const ordersRoutes = Router();
+
+ordersRoutes.use(authenticate, requireOrg, requirePaidAccess);
 
 ordersRoutes.use(authenticate, requireOrg);
 
@@ -65,6 +68,8 @@ ordersRoutes.post(
 );
 
 export const analyticsRoutes = Router();
+
+analyticsRoutes.use(authenticate, requireOrg, requirePaidAccess);
 
 analyticsRoutes.get(
   "/overview",

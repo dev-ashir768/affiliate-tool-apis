@@ -9,7 +9,12 @@ export function getStripe(): Stripe {
     throw new AppError("INTERNAL", "Stripe is not configured", 500);
   }
   if (!client) {
-    client = new Stripe(env.STRIPE_SECRET_KEY);
+    // Pin API version once tested; omit to use account default for newer Stripe SDKs.
+    client = new Stripe(env.STRIPE_SECRET_KEY, {
+      typescript: true,
+      maxNetworkRetries: 2,
+      timeout: 20_000,
+    });
   }
   return client;
 }

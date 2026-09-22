@@ -211,13 +211,23 @@ model User {
 
 model Plan {
   id                String   @id @default(cuid())
-  code              String   @unique // starter | growth | agency | free
+  code              String   @unique // free | starter | growth | pro
   name              String
+  description       String?
   monthlyPriceCents Int
   seatLimit         Int
   shopLimit         Int
+  /// Max reserved bots (shop verify identities) for the org.
+  botLimit          Int      @default(0)
   dailyInviteQuota  Int
+  /// Stripe Checkout trial length (0 = no trial).
+  trialDays         Int      @default(0)
   stripePriceId     String?
+  /// Shown on billing / onboarding when true.
+  isPublic          Boolean  @default(true)
+  /// Ops can soft-disable a plan without deleting history.
+  active            Boolean  @default(true)
+  sortOrder         Int      @default(0)
   organizations     Organization[]
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
@@ -232,6 +242,7 @@ model Organization {
   stripeCustomerId String?
   seatLimit        Int
   shopLimit        Int
+  botLimit         Int            @default(0)
   dailyInviteQuota Int
   createdAt        DateTime       @default(now())
   updatedAt        DateTime       @updatedAt

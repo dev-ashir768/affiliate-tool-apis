@@ -15,7 +15,7 @@ type NavItemSeed = {
 async function seedNavSection(
   area: NavArea,
   key: string,
-  items: NavItemSeed[]
+  items: NavItemSeed[],
 ) {
   const section = await prisma.navSection.upsert({
     where: { area_key: { area, key } },
@@ -58,7 +58,7 @@ async function seedSuperadmin() {
     } catch (error) {
       console.warn(
         "Skipping superadmin seed: argon2 unavailable. Set PLATFORM_SUPERADMIN_PASSWORD_HASH or unblock native argon2.",
-        error
+        error,
       );
       return null;
     }
@@ -95,38 +95,63 @@ async function main() {
     {
       code: "free",
       name: "Free",
+      description: "No product access until you subscribe.",
       monthlyPriceCents: 0,
       seatLimit: 1,
       shopLimit: 0,
+      botLimit: 0,
       dailyInviteQuota: 0,
-      stripePriceId: null,
+      trialDays: 0,
+      sortOrder: 0,
+      isPublic: false,
+      active: true,
+      stripePriceId: null as string | null,
     },
     {
       code: "starter",
       name: "Starter",
-      monthlyPriceCents: 4900,
+      description: "1 TikTok shop and 1 verify bot. Perfect to get live.",
+      monthlyPriceCents: 1000,
       seatLimit: 1,
       shopLimit: 1,
+      botLimit: 1,
       dailyInviteQuota: 500,
+      trialDays: 7,
+      sortOrder: 10,
+      isPublic: true,
+      active: true,
       stripePriceId: process.env.STRIPE_PRICE_STARTER ?? null,
     },
     {
       code: "growth",
       name: "Growth",
-      monthlyPriceCents: 11900,
+      description: "2 shops and 3 bots for small teams scaling outreach.",
+      monthlyPriceCents: 3000,
       seatLimit: 3,
-      shopLimit: 3,
-      dailyInviteQuota: 1500,
+      shopLimit: 2,
+      botLimit: 3,
+      dailyInviteQuota: 2000,
+      trialDays: 7,
+      sortOrder: 20,
+      isPublic: true,
+      active: true,
       stripePriceId: process.env.STRIPE_PRICE_GROWTH ?? null,
     },
     {
-      code: "agency",
-      name: "Agency",
-      monthlyPriceCents: 24900,
+      code: "pro",
+      name: "Pro",
+      description: "5 shops and 8 bots for agencies running multi-brand ops.",
+      monthlyPriceCents: 7900,
       seatLimit: 5,
-      shopLimit: 10,
-      dailyInviteQuota: 5000,
-      stripePriceId: process.env.STRIPE_PRICE_AGENCY ?? null,
+      shopLimit: 5,
+      botLimit: 8,
+      dailyInviteQuota: 8000,
+      trialDays: 14,
+      sortOrder: 30,
+      isPublic: true,
+      active: true,
+      stripePriceId:
+        process.env.STRIPE_PRICE_PRO ?? process.env.STRIPE_PRICE_AGENCY ?? null,
     },
   ];
 
@@ -134,9 +159,31 @@ async function main() {
     await prisma.plan.upsert({
       where: { code: plan.code },
       create: plan,
-      update: plan,
+      update: {
+        name: plan.name,
+        description: plan.description,
+        monthlyPriceCents: plan.monthlyPriceCents,
+        seatLimit: plan.seatLimit,
+        shopLimit: plan.shopLimit,
+        botLimit: plan.botLimit,
+        dailyInviteQuota: plan.dailyInviteQuota,
+        trialDays: plan.trialDays,
+        sortOrder: plan.sortOrder,
+        isPublic: plan.isPublic,
+        active: plan.active,
+        // Keep existing Stripe price if env not set (ops may have edited in backoffice).
+        ...(plan.stripePriceId ? { stripePriceId: plan.stripePriceId } : {}),
+      },
     });
   }
+
+  // Soft-retire legacy agency code if present — map to pro limits for display.
+  await prisma.plan
+    .updateMany({
+      where: { code: "agency" },
+      data: { active: false, isPublic: false },
+    })
+    .catch(() => undefined);
 
   for (let i = 1; i <= 5; i++) {
     const email = `bot-s${i}@example.com`;
@@ -295,11 +342,23 @@ async function main() {
       allowedPlatformRoles: [PlatformRole.SUPERADMIN, PlatformRole.OPS],
     },
     {
+      key: "plans",
+      label: "Plans",
+      href: "/backoffice/plans",
+      icon: "BadgeDollarSign",
+      sortOrder: 5,
+      allowedPlatformRoles: [
+        PlatformRole.SUPERADMIN,
+        PlatformRole.OPS,
+        PlatformRole.FINANCE,
+      ],
+    },
+    {
       key: "finance",
       label: "Finance",
       href: "/backoffice/finance",
       icon: "BadgeDollarSign",
-      sortOrder: 5,
+      sortOrder: 6,
       allowedPlatformRoles: [PlatformRole.SUPERADMIN, PlatformRole.FINANCE],
     },
     {
@@ -307,7 +366,7 @@ async function main() {
       label: "Audit",
       href: "/backoffice/audit",
       icon: "ScrollText",
-      sortOrder: 6,
+      sortOrder: 7,
       allowedPlatformRoles: [PlatformRole.SUPERADMIN],
     },
     {
@@ -346,7 +405,7 @@ async function main() {
 
   console.log(
     `Seed complete: ${sectionCount} nav sections, ${itemCount} nav items, ${membershipCount} platform memberships` +
-      (superadminEmail ? ` (superadmin: ${superadminEmail})` : "")
+      (superadminEmail ? ` (superadmin: ${superadminEmail})` : ""),
   );
 }
 

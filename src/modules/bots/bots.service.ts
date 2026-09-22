@@ -1,7 +1,10 @@
 import { prisma } from "../../lib/prisma.js";
 import { AppError } from "../../lib/errors.js";
+import { assertBotCapacity } from "../../lib/entitlements.js";
 
 export async function reserveBot(organizationId: string) {
+  await assertBotCapacity(organizationId);
+
   const bot = await prisma.botIdentity.findFirst({
     where: { status: "AVAILABLE", shop: null },
     orderBy: { createdAt: "asc" },

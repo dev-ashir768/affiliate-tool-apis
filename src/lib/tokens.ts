@@ -8,6 +8,8 @@ export type AccessClaims = {
   orgId: string | null;
   orgRole: "OWNER" | "ADMIN" | "MEMBER" | null;
   platformRole: "SUPERADMIN" | "FINANCE" | "OPS" | null;
+  /** Merchant product access (subscription ACTIVE/TRIALING/PAST_DUE). */
+  hasProductAccess: boolean;
 };
 
 const accessKey = () => new TextEncoder().encode(env.JWT_ACCESS_SECRET);
@@ -17,6 +19,7 @@ export async function signAccessToken(claims: AccessClaims): Promise<string> {
     orgId: claims.orgId,
     orgRole: claims.orgRole,
     platformRole: claims.platformRole,
+    hasProductAccess: claims.hasProductAccess,
   })
     .setProtectedHeader({ alg: "HS256" })
     .setSubject(claims.sub)
@@ -32,6 +35,7 @@ export async function verifyAccessToken(token: string): Promise<AccessClaims> {
     orgId: payload.orgId == null ? null : String(payload.orgId),
     orgRole: (payload.orgRole as AccessClaims["orgRole"]) ?? null,
     platformRole: (payload.platformRole as AccessClaims["platformRole"]) ?? null,
+    hasProductAccess: Boolean(payload.hasProductAccess),
   };
 }
 

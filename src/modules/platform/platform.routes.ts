@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { z } from "zod";
 import { AppError } from "../../lib/errors.js";
 import { validateBody, validateQuery } from "../../middleware/validate.js";
 import { authenticate } from "../../middleware/authenticate.js";
@@ -42,6 +43,10 @@ import {
   listNavigationAdmin,
   patchNavItem,
 } from "./navigation-admin.service.js";
+import {
+  listPlansForPlatform,
+  patchPlan,
+} from "../billing/billing.service.js";
 
 export const platformRoutes = Router();
 
@@ -58,7 +63,7 @@ platformRoutes.get(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 platformRoutes.post(
@@ -72,7 +77,7 @@ platformRoutes.post(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 platformRoutes.patch(
@@ -84,12 +89,16 @@ platformRoutes.patch(
       if (!req.auth?.sub) {
         throw new AppError("UNAUTHORIZED", "Missing access token", 401);
       }
-      const staff = await patchStaff(String(req.params.id), req.body, req.auth.sub);
+      const staff = await patchStaff(
+        String(req.params.id),
+        req.body,
+        req.auth.sub,
+      );
       res.json(staff);
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 platformRoutes.get(
@@ -103,7 +112,7 @@ platformRoutes.get(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 platformRoutes.get(
@@ -116,7 +125,7 @@ platformRoutes.get(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 platformRoutes.get(
@@ -130,7 +139,7 @@ platformRoutes.get(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 platformRoutes.get(
@@ -143,7 +152,7 @@ platformRoutes.get(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 platformRoutes.get(
@@ -156,7 +165,7 @@ platformRoutes.get(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 platformRoutes.post(
@@ -170,7 +179,7 @@ platformRoutes.post(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 platformRoutes.patch(
@@ -184,7 +193,7 @@ platformRoutes.patch(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 platformRoutes.get(
@@ -196,7 +205,7 @@ platformRoutes.get(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 platformRoutes.post(
@@ -209,7 +218,7 @@ platformRoutes.post(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 platformRoutes.get(
@@ -222,7 +231,7 @@ platformRoutes.get(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 platformRoutes.post(
@@ -239,7 +248,7 @@ platformRoutes.post(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 platformRoutes.patch(
@@ -254,13 +263,13 @@ platformRoutes.patch(
       const creator = await patchPlatformCreator(
         String(req.params.id),
         req.body,
-        req.auth.sub
+        req.auth.sub,
       );
       res.json(creator);
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 platformRoutes.get(
@@ -273,7 +282,7 @@ platformRoutes.get(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 platformRoutes.get(
@@ -286,7 +295,7 @@ platformRoutes.get(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 platformRoutes.post(
@@ -300,7 +309,7 @@ platformRoutes.post(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 platformRoutes.patch(
@@ -314,5 +323,50 @@ platformRoutes.patch(
     } catch (err) {
       next(err);
     }
-  }
+  },
+);
+
+platformRoutes.get(
+  "/plans",
+  requirePlatform("SUPERADMIN", "OPS", "FINANCE"),
+  async (_req, res, next) => {
+    try {
+      res.json({ plans: await listPlansForPlatform() });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+const patchPlatformPlanSchema = z.object({
+  name: z.string().trim().min(1).max(80).optional(),
+  description: z.string().trim().max(500).optional().nullable(),
+  monthlyPriceCents: z.number().int().nonnegative().optional(),
+  seatLimit: z.number().int().nonnegative().optional(),
+  shopLimit: z.number().int().nonnegative().optional(),
+  botLimit: z.number().int().nonnegative().optional(),
+  dailyInviteQuota: z.number().int().nonnegative().optional(),
+  trialDays: z.number().int().min(0).max(90).optional(),
+  stripePriceId: z.string().trim().min(1).max(120).optional().nullable(),
+  isPublic: z.boolean().optional(),
+  active: z.boolean().optional(),
+  sortOrder: z.number().int().optional(),
+});
+
+platformRoutes.patch(
+  "/plans/:id",
+  requirePlatform("SUPERADMIN", "OPS"),
+  validateBody(patchPlatformPlanSchema),
+  async (req, res, next) => {
+    try {
+      if (!req.auth?.sub) {
+        throw new AppError("UNAUTHORIZED", "Missing access token", 401);
+      }
+      res.json(
+        await patchPlan(String(req.params.id), req.body, req.auth.sub),
+      );
+    } catch (err) {
+      next(err);
+    }
+  },
 );

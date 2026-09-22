@@ -2,6 +2,7 @@ import { Router } from "express";
 import { AppError } from "../../lib/errors.js";
 import { validateBody } from "../../middleware/validate.js";
 import { authenticate } from "../../middleware/authenticate.js";
+import { requirePaidAccess } from "../../middleware/require-paid-access.js";
 import { requireOrg } from "../../middleware/require-org.js";
 import { requireRole } from "../../middleware/require-role.js";
 import { rateLimit, rateLimitKey } from "../../middleware/rate-limit.js";
@@ -14,6 +15,8 @@ import {
 } from "./invites.service.js";
 
 export const invitesRoutes = Router();
+
+invitesRoutes.use(authenticate, requireOrg, requirePaidAccess);
 
 invitesRoutes.use(authenticate, requireOrg);
 
