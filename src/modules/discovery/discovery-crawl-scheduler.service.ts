@@ -1,7 +1,6 @@
 import { env } from "../../config/env.js";
 import { logger } from "../../lib/logger.js";
 import {
-  discoverySyncQueue,
   DISCOVERY_SYNC_QUEUE,
   getDiscoverySyncQueue,
 } from "../../lib/queue.js";
@@ -66,8 +65,8 @@ export async function runScheduledCrawlForRegion(
 }
 
 /**
- * Register / refresh BullMQ repeatable jobs for configured regions.
- * Safe to call on every worker boot (idempotent jobIds).
+ * Register / refresh BullMQ job schedulers for configured regions.
+ * Safe to call on every worker boot (idempotent scheduler ids).
  */
 export async function registerDiscoveryCrawlSchedulers(): Promise<{
   enabled: boolean;
@@ -80,47 +79,47 @@ export async function registerDiscoveryCrawlSchedulers(): Promise<{
   const configured = getConfiguredCrawlRegions();
   const registered: string[] = [];
   const removed: string[] = [];
-
-  const existing = await queue.getRepeatableJobs();
   const knownIds = new Set([CRAWL_SCHEDULE_JOB_US, CRAWL_SCHEDULE_JOB_UK]);
 
+  const existing = await queue.getJobSchedulers(0, 100);
+  const ourExisting = existing.filter(
+    (j: { id?: string | null }) => j.id && knownIds.has(j.id),
+  );
+
   if (!env.DISCOVERY_CRAWL_SCHEDULER_ENABLED || configured.length === 0) {
-    for (const job of existing) {
-      if (job.id && knownIds.has(job.id)) {
-        await queue.removeRepeatableByKey(job.key);
+    for (const job of ourExisting) {
+      if (job.id) {
+        await queue.removeJobScheduler(job.id);
         removed.push(job.id);
       }
     }
-    return {
-      enabled: false,
-      cron,
-      registered,
-      removed,
-    };
+    return { enabled: false, cron, registered, removed };
   }
 
   const want = new Set(configured.map((c) => c.jobId));
 
-  for (const job of existing) {
-    if (job.id && knownIds.has(job.id) && !want.has(job.id)) {
-      await queue.removeRepeatableByKey(job.key);
+  for (const job of ourExisting) {
+    if (job.id && !want.has(job.id)) {
+      await queue.removeJobScheduler(job.id);
       removed.push(job.id);
     }
   }
 
   for (const cfg of configured) {
-    await discoverySyncQueue.add(
-      "discovery-crawl-schedule",
+    await queue.upsertJobScheduler(
+      cfg.jobId,
+      { pattern: cron },
       {
-        mode: "crawl_schedule" as const,
-        region: cfg.region,
-        requestedAt: new Date().toISOString(),
-      },
-      {
-        jobId: cfg.jobId,
-        repeat: { pattern: cron },
-        removeOnComplete: 20,
-        removeOnFail: 50,
+        name: "discovery-crawl-schedule",
+        data: {
+          mode: "crawl_schedule" as const,
+          region: cfg.region,
+          requestedAt: new Date().toISOString(),
+        },
+        opts: {
+          removeOnComplete: 20,
+          removeOnFail: 50,
+        },
       },
     );
     registered.push(cfg.jobId);
@@ -137,9 +136,10 @@ export async function registerDiscoveryCrawlSchedulers(): Promise<{
 
 export async function getDiscoveryCrawlSchedulerStatus() {
   const queue = getDiscoverySyncQueue();
-  const repeatable = await queue.getRepeatableJobs();
-  const ours = repeatable.filter(
-    (j) => j.id === CRAWL_SCHEDULE_JOB_US || j.id === CRAWL_SCHEDULE_JOB_UK,
+  const schedulers = await queue.getJobSchedulers(0, 100);
+  const ours = schedulers.filter(
+    (j: { id?: string | null }) =>
+      j.id === CRAWL_SCHEDULE_JOB_US || j.id === CRAWL_SCHEDULE_JOB_UK,
   );
   return {
     enabled: env.DISCOVERY_CRAWL_SCHEDULER_ENABLED,
@@ -153,12 +153,19 @@ export async function getDiscoveryCrawlSchedulerStatus() {
       shopId: r.shopId,
       jobId: r.jobId,
     })),
-    repeatable: ours.map((j) => ({
-      id: j.id,
-      pattern: j.pattern,
-      next: j.next,
-      key: j.key,
-    })),
+    repeatable: ours.map(
+      (j: {
+        id?: string | null;
+        pattern?: string | null;
+        next?: number;
+        key?: string;
+      }) => ({
+        id: j.id,
+        pattern: j.pattern,
+        next: j.next ?? 0,
+        key: j.key ?? j.id ?? "",
+      }),
+    ),
     queue: DISCOVERY_SYNC_QUEUE,
   };
 }

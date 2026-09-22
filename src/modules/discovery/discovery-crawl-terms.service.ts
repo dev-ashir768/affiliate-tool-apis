@@ -1,8 +1,19 @@
 import type { ShopRegion } from "@prisma/client";
-import { prisma } from "../../lib/prisma.js";
+import { discoveryCrawlTerms } from "../../lib/prisma.js";
 import { AppError } from "../../lib/errors.js";
 import { writeAuditLog } from "../../lib/audit.js";
 import { DISCOVERY_KEYWORDS_US } from "./data/discovery-keywords.us.js";
+
+type CrawlTermRow = {
+  id: string;
+  keyword: string;
+  region: ShopRegion | null;
+  regionKey: string;
+  enabled: boolean;
+  sortOrder: number;
+  createdAt: Date;
+  updatedAt: Date;
+};
 
 function normalizeKeyword(raw: string): string {
   return raw.trim().toLowerCase().replace(/\s+/g, " ");
@@ -10,6 +21,19 @@ function normalizeKeyword(raw: string): string {
 
 function regionKeyOf(region: "US" | "UK" | null | undefined): string {
   return region ?? "ALL";
+}
+
+function toTermDto(r: CrawlTermRow) {
+  return {
+    id: r.id,
+    keyword: r.keyword,
+    region: r.region,
+    regionKey: r.regionKey,
+    enabled: r.enabled,
+    sortOrder: r.sortOrder,
+    createdAt: r.createdAt.toISOString(),
+    updatedAt: r.updatedAt.toISOString(),
+  };
 }
 
 export async function listCrawlTerms(params: {
@@ -39,8 +63,8 @@ export async function listCrawlTerms(params: {
   }
 
   const [total, rows] = await Promise.all([
-    prisma.discoveryCrawlTerm.count({ where }),
-    prisma.discoveryCrawlTerm.findMany({
+    discoveryCrawlTerms.count({ where }),
+    discoveryCrawlTerms.findMany({
       where,
       orderBy: [{ sortOrder: "asc" }, { keyword: "asc" }],
       skip: (page - 1) * pageSize,
@@ -49,16 +73,7 @@ export async function listCrawlTerms(params: {
   ]);
 
   return {
-    data: rows.map((r) => ({
-      id: r.id,
-      keyword: r.keyword,
-      region: r.region,
-      regionKey: r.regionKey,
-      enabled: r.enabled,
-      sortOrder: r.sortOrder,
-      createdAt: r.createdAt.toISOString(),
-      updatedAt: r.updatedAt.toISOString(),
-    })),
+    data: (rows as CrawlTermRow[]).map(toTermDto),
     meta: { total, page, pageSize },
   };
 }
@@ -78,7 +93,7 @@ export async function createCrawlTerm(
   }
   const region = input.region ?? null;
   try {
-    const row = await prisma.discoveryCrawlTerm.create({
+    const row = await discoveryCrawlTerms.create({
       data: {
         keyword,
         region,
@@ -144,7 +159,7 @@ export async function patchCrawlTerm(
   if (input.sortOrder != null) data.sortOrder = input.sortOrder;
 
   try {
-    const row = await prisma.discoveryCrawlTerm.update({
+    const row = await discoveryCrawlTerms.update({
       where: { id },
       data,
     });
@@ -189,7 +204,7 @@ export async function patchCrawlTerm(
 
 export async function deleteCrawlTerm(id: string, actorUserId?: string) {
   try {
-    await prisma.discoveryCrawlTerm.delete({ where: { id } });
+    await discoveryCrawlTerms.delete({ where: { id } });
   } catch (err) {
     if (
       err &&
@@ -219,7 +234,7 @@ export async function ensureCrawlTermsSeeded(): Promise<{
   seeded: number;
   total: number;
 }> {
-  const existing = await prisma.discoveryCrawlTerm.count();
+  const existing = await discoveryCrawlTerms.count();
   if (existing > 0) {
     return { seeded: 0, total: existing };
   }
@@ -228,7 +243,7 @@ export async function ensureCrawlTermsSeeded(): Promise<{
     const keyword = normalizeKeyword(DISCOVERY_KEYWORDS_US[i]!);
     if (!keyword) continue;
     try {
-      await prisma.discoveryCrawlTerm.create({
+      await discoveryCrawlTerms.create({
         data: {
           keyword,
           region: null,
@@ -242,7 +257,7 @@ export async function ensureCrawlTermsSeeded(): Promise<{
       /* unique race — ignore */
     }
   }
-  const total = await prisma.discoveryCrawlTerm.count();
+  const total = await discoveryCrawlTerms.count();
   return { seeded, total };
 }
 
@@ -251,7 +266,7 @@ export async function resolveCrawlKeywords(
   region?: "US" | "UK",
 ): Promise<string[]> {
   await ensureCrawlTermsSeeded();
-  const rows = await prisma.discoveryCrawlTerm.findMany({
+  const rows = await discoveryCrawlTerms.findMany({
     where: {
       enabled: true,
       OR: region
@@ -262,7 +277,11 @@ export async function resolveCrawlKeywords(
     select: { keyword: true },
   });
   if (rows.length) {
-    return [...new Set(rows.map((r) => r.keyword))];
+    return [
+      ...new Set(
+        (rows as Array<{ keyword: string }>).map((r) => r.keyword),
+      ),
+    ];
   }
   return [...DISCOVERY_KEYWORDS_US];
 }

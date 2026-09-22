@@ -7,10 +7,13 @@ import { requireRole } from "../../middleware/require-role.js";
 import { requirePlatform } from "../../middleware/require-platform.js";
 import {
   createDiscoveryProfileSchema,
+  createCrawlTermSchema,
+  crawlTermListSchema,
   discoveryCrawlPlanSchema,
   discoveryMetricsRefreshSchema,
   discoverySearchSchema,
   importDiscoverySchema,
+  patchCrawlTermSchema,
   refreshCreatorMetricsSchema,
   tiktokDiscoverySyncSchema,
 } from "./discovery.schemas.js";
@@ -36,6 +39,18 @@ import {
   planDiscoveryCrawl,
   refreshDiscoveryProfileMetrics,
 } from "./discovery-crawl.service.js";
+import {
+  createCrawlTerm,
+  deleteCrawlTerm,
+  ensureCrawlTermsSeeded,
+  listCrawlTerms,
+  patchCrawlTerm,
+} from "./discovery-crawl-terms.service.js";
+import {
+  getDiscoveryCrawlSchedulerStatus,
+  registerDiscoveryCrawlSchedulers,
+} from "./discovery-crawl-scheduler.service.js";
+import { reindexDiscoveryToMeili } from "../../lib/meilisearch.js";
 
 export const discoveryRoutes = Router();
 
@@ -373,6 +388,124 @@ platformDiscoveryRoutes.post(
           ...rest,
         }),
       );
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+platformDiscoveryRoutes.get(
+  "/crawl/terms",
+  authenticate,
+  requirePlatform("SUPERADMIN", "OPS"),
+  validateQuery(crawlTermListSchema),
+  async (req, res, next) => {
+    try {
+      res.json(await listCrawlTerms(req.query as any));
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+platformDiscoveryRoutes.post(
+  "/crawl/terms",
+  authenticate,
+  requirePlatform("SUPERADMIN", "OPS"),
+  validateBody(createCrawlTermSchema),
+  async (req, res, next) => {
+    try {
+      if (!req.auth?.sub) {
+        throw new AppError("UNAUTHORIZED", "Missing access token", 401);
+      }
+      res.status(201).json(await createCrawlTerm(req.body, req.auth.sub));
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+platformDiscoveryRoutes.post(
+  "/crawl/terms/seed",
+  authenticate,
+  requirePlatform("SUPERADMIN", "OPS"),
+  async (req, res, next) => {
+    try {
+      res.json(await ensureCrawlTermsSeeded());
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+platformDiscoveryRoutes.patch(
+  "/crawl/terms/:id",
+  authenticate,
+  requirePlatform("SUPERADMIN", "OPS"),
+  validateBody(patchCrawlTermSchema),
+  async (req, res, next) => {
+    try {
+      if (!req.auth?.sub) {
+        throw new AppError("UNAUTHORIZED", "Missing access token", 401);
+      }
+      res.json(
+        await patchCrawlTerm(String(req.params.id), req.body, req.auth.sub),
+      );
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+platformDiscoveryRoutes.delete(
+  "/crawl/terms/:id",
+  authenticate,
+  requirePlatform("SUPERADMIN", "OPS"),
+  async (req, res, next) => {
+    try {
+      if (!req.auth?.sub) {
+        throw new AppError("UNAUTHORIZED", "Missing access token", 401);
+      }
+      res.json(await deleteCrawlTerm(String(req.params.id), req.auth.sub));
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+platformDiscoveryRoutes.get(
+  "/crawl/scheduler",
+  authenticate,
+  requirePlatform("SUPERADMIN", "OPS"),
+  async (_req, res, next) => {
+    try {
+      res.json(await getDiscoveryCrawlSchedulerStatus());
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+platformDiscoveryRoutes.post(
+  "/crawl/scheduler/register",
+  authenticate,
+  requirePlatform("SUPERADMIN", "OPS"),
+  async (_req, res, next) => {
+    try {
+      res.json(await registerDiscoveryCrawlSchedulers());
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+platformDiscoveryRoutes.post(
+  "/search/reindex",
+  authenticate,
+  requirePlatform("SUPERADMIN", "OPS"),
+  async (_req, res, next) => {
+    try {
+      res.json(await reindexDiscoveryToMeili());
     } catch (err) {
       next(err);
     }

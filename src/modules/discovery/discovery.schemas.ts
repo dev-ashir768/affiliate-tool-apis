@@ -99,6 +99,35 @@ export const discoveryMetricsRefreshSchema = z.object({
   sync: z.boolean().optional(),
 });
 
+export const crawlTermListSchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce.number().int().min(1).max(200).default(50),
+  region: z.enum(["US", "UK"]).optional(),
+  search: z.string().optional(),
+  enabled: z
+    .union([z.literal("true"), z.literal("false"), z.boolean()])
+    .optional()
+    .transform((v) => {
+      if (v === undefined) return undefined;
+      if (typeof v === "boolean") return v;
+      return v === "true";
+    }),
+});
+
+export const createCrawlTermSchema = z.object({
+  keyword: z.string().trim().min(1).max(100),
+  region: z.enum(["US", "UK"]).optional().nullable(),
+  enabled: z.boolean().optional(),
+  sortOrder: z.number().int().optional(),
+});
+
+export const patchCrawlTermSchema = z.object({
+  keyword: z.string().trim().min(1).max(100).optional(),
+  region: z.enum(["US", "UK"]).optional().nullable(),
+  enabled: z.boolean().optional(),
+  sortOrder: z.number().int().optional(),
+});
+
 export const createOrderSchema = z.object({
   externalOrderId: z.string().trim().min(1).max(120),
   gmvCents: z.number().int().nonnegative(),

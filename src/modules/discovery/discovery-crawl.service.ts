@@ -1,5 +1,5 @@
 import type { ShopRegion } from "@prisma/client";
-import { prisma, discoveryCrawlCells } from "../../lib/prisma.js";
+import { prisma, discoveryCrawlCells, discoveryCrawlTerms } from "../../lib/prisma.js";
 import { AppError } from "../../lib/errors.js";
 import { logger } from "../../lib/logger.js";
 import { writeAuditLog } from "../../lib/audit.js";
@@ -22,6 +22,8 @@ import {
 } from "./creator-metrics.js";
 import { DISCOVERY_KEYWORDS_US } from "./data/discovery-keywords.us.js";
 import { resolveCrawlKeywords } from "./discovery-crawl-terms.service.js";
+import { getMeiliStatus } from "../../lib/meilisearch.js";
+import { getDiscoveryCrawlSchedulerStatus } from "./discovery-crawl-scheduler.service.js";
 
 /** Default follower bands for crawl grid cells. */
 export const DEFAULT_FOLLOWER_BANDS = [
@@ -518,38 +520,50 @@ export async function enqueueDiscoveryMetricsRefresh(input: {
 }
 
 export async function getDiscoveryCrawlStatus() {
-  const [profileCount, withOpenId, withGmvCents, cellAgg, recentCells, queue] =
-    await Promise.all([
-      prisma.creatorDiscoveryProfile.count({ where: { enabled: true } }),
-      prisma.creatorDiscoveryProfile.count({
-        where: { enabled: true, creatorOpenId: { not: null } },
-      }),
-      prisma.creatorDiscoveryProfile.count({
-        where: { enabled: true, gmvCents: { not: null } },
-      }),
-      discoveryCrawlCells.groupBy({
-        by: ["lastStatus"],
-        _count: { _all: true },
-      }),
-      discoveryCrawlCells.findMany({
-        orderBy: { lastRunAt: "desc" },
-        take: 15,
-        select: {
-          cellKey: true,
-          region: true,
-          keyword: true,
-          minFollowers: true,
-          lastRunAt: true,
-          lastStatus: true,
-          lastImported: true,
-          lastUpdated: true,
-          lastError: true,
-        },
-      }),
-      getDiscoverySyncQueue()
-        .getJobCounts("waiting", "active", "completed", "failed", "delayed")
-        .catch(() => null),
-    ]);
+  const [
+    profileCount,
+    withOpenId,
+    withGmvCents,
+    termCount,
+    cellAgg,
+    recentCells,
+    queue,
+    meili,
+    scheduler,
+  ] = await Promise.all([
+    prisma.creatorDiscoveryProfile.count({ where: { enabled: true } }),
+    prisma.creatorDiscoveryProfile.count({
+      where: { enabled: true, creatorOpenId: { not: null } },
+    }),
+    prisma.creatorDiscoveryProfile.count({
+      where: { enabled: true, gmvCents: { not: null } },
+    }),
+    discoveryCrawlTerms.count({ where: { enabled: true } }),
+    discoveryCrawlCells.groupBy({
+      by: ["lastStatus"],
+      _count: { _all: true },
+    }),
+    discoveryCrawlCells.findMany({
+      orderBy: { lastRunAt: "desc" },
+      take: 15,
+      select: {
+        cellKey: true,
+        region: true,
+        keyword: true,
+        minFollowers: true,
+        lastRunAt: true,
+        lastStatus: true,
+        lastImported: true,
+        lastUpdated: true,
+        lastError: true,
+      },
+    }),
+    getDiscoverySyncQueue()
+      .getJobCounts("waiting", "active", "completed", "failed", "delayed")
+      .catch(() => null),
+    getMeiliStatus(),
+    getDiscoveryCrawlSchedulerStatus().catch(() => null),
+  ]);
 
   const cellsByStatus: Record<string, number> = {};
   for (const row of cellAgg) {
@@ -561,7 +575,7 @@ export async function getDiscoveryCrawlStatus() {
       enabledProfiles: profileCount,
       withOpenId,
       withGmvCents,
-      keywordSeedSize: loadDiscoveryKeywords().length,
+      keywordSeedSize: termCount || loadDiscoveryKeywords().length,
       followerBands: [...DEFAULT_FOLLOWER_BANDS],
     },
     cells: {
@@ -572,5 +586,7 @@ export async function getDiscoveryCrawlStatus() {
       })),
     },
     queue: queue ? { name: DISCOVERY_SYNC_QUEUE, counts: queue } : null,
+    search: meili,
+    scheduler,
   };
 }

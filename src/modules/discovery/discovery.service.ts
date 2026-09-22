@@ -6,7 +6,10 @@ import type {
 import { prisma } from "../../lib/prisma.js";
 import { AppError } from "../../lib/errors.js";
 import { writeAuditLog } from "../../lib/audit.js";
-import { searchDiscoveryInMeili } from "../../lib/meilisearch.js";
+import {
+  indexDiscoveryProfile,
+  searchDiscoveryInMeili,
+} from "../../lib/meilisearch.js";
 
 /** Metrics fields are optional so mapping stays valid if the TS server lags behind `prisma generate`. */
 type DiscoveryRow = {
@@ -223,6 +226,7 @@ export async function createDiscoveryProfile(
         entityId: row.id,
       });
     }
+    void indexDiscoveryProfile(row);
     return toProfile(row);
   } catch (err) {
     if (
