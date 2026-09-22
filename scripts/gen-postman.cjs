@@ -438,6 +438,15 @@ const collection = {
             ],
           },
         }),
+        req("TikTok Discovery Status", "GET", "/api/v1/platform/discovery/tiktok/status"),
+        req("TikTok Discovery Sync", "POST", "/api/v1/platform/discovery/tiktok/sync", {
+          body: {
+            maxPages: 2,
+            pageSize: 20,
+            keyword: null,
+            sync: false,
+          },
+        }),
       ],
     },
     {

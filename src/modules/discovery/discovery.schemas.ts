@@ -26,6 +26,15 @@ export const importDiscoverySchema = z.object({
     .max(500),
 });
 
+export const tiktokDiscoverySyncSchema = z.object({
+  maxPages: z.coerce.number().int().min(1).max(20).optional(),
+  keyword: z.string().trim().max(100).optional().nullable(),
+  minFollowers: z.coerce.number().int().nonnegative().optional().nullable(),
+  pageSize: z.union([z.literal(12), z.literal(20)]).optional(),
+  /** When true, run inline instead of BullMQ (ops/debug). Default false. */
+  sync: z.boolean().optional(),
+});
+
 export const createOrderSchema = z.object({
   externalOrderId: z.string().trim().min(1).max(120),
   gmvCents: z.number().int().nonnegative(),

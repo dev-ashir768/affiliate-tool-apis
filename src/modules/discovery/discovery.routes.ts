@@ -9,6 +9,7 @@ import {
   createDiscoveryProfileSchema,
   discoverySearchSchema,
   importDiscoverySchema,
+  tiktokDiscoverySyncSchema,
 } from "./discovery.schemas.js";
 import {
   createDiscoveryProfile,
@@ -16,6 +17,12 @@ import {
   saveDiscoveryToCrm,
   searchDiscovery,
 } from "./discovery.service.js";
+import {
+  enqueueDiscoveryTikTokSync,
+  getDiscoverySyncQueueStatus,
+  getDiscoveryTikTokStatus,
+  syncDiscoveryFromTikTok,
+} from "./tiktok-sync.service.js";
 
 export const discoveryRoutes = Router();
 
@@ -108,6 +115,51 @@ platformDiscoveryRoutes.post(
       res.json(
         await importDiscoveryProfiles(req.body.profiles, req.auth.sub)
       );
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+platformDiscoveryRoutes.get(
+  "/tiktok/status",
+  authenticate,
+  requirePlatform("SUPERADMIN", "OPS"),
+  async (_req, res, next) => {
+    try {
+      const config = getDiscoveryTikTokStatus();
+      const queue = await getDiscoverySyncQueueStatus().catch(() => null);
+      res.json({ config, queue });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+platformDiscoveryRoutes.post(
+  "/tiktok/sync",
+  authenticate,
+  requirePlatform("SUPERADMIN", "OPS"),
+  validateBody(tiktokDiscoverySyncSchema),
+  async (req, res, next) => {
+    try {
+      if (!req.auth?.sub) {
+        throw new AppError("UNAUTHORIZED", "Missing access token", 401);
+      }
+      const { sync, ...options } = req.body as {
+        sync?: boolean;
+        maxPages?: number;
+        keyword?: string | null;
+        minFollowers?: number | null;
+        pageSize?: 12 | 20;
+      };
+      if (sync) {
+        res.json(await syncDiscoveryFromTikTok(req.auth.sub, options));
+        return;
+      }
+      res
+        .status(202)
+        .json(await enqueueDiscoveryTikTokSync(req.auth.sub, options));
     } catch (err) {
       next(err);
     }

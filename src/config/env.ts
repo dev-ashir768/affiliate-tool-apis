@@ -66,6 +66,18 @@ const schema = z.object({
   SMTP_USER: z.string().optional(),
   SMTP_PASS: z.string().optional(),
   RESEND_API_KEY: z.string().optional(),
+
+  /** TikTok Shop OpenAPI — Affiliate Seller creator marketplace sync */
+  TIKTOK_SHOP_APP_KEY: z.string().min(1).optional(),
+  TIKTOK_SHOP_APP_SECRET: z.string().min(1).optional(),
+  TIKTOK_SHOP_ACCESS_TOKEN: z.string().min(1).optional(),
+  TIKTOK_SHOP_REFRESH_TOKEN: z.string().min(1).optional(),
+  TIKTOK_SHOP_CIPHER: z.string().min(1).optional(),
+  TIKTOK_SHOP_OPENAPI_BASE_URL: z
+    .string()
+    .url()
+    .default("https://open-api.tiktokglobalshop.com"),
+  TIKTOK_SHOP_REGION: z.enum(["US", "UK"]).default("US"),
 });
 
 export type Env = z.infer<typeof schema>;

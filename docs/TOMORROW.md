@@ -1,22 +1,29 @@
 # Ops checklist
 
-Updated: 2026-09-21
+Updated: 2026-09-22
 
-## Needs real credentials (product works without them)
+## TikTok Discover sync (Option C) — wire status
 
-1. **Live Seller Center** — `SHOP_VERIFY_LIVE_URL_US/UK` + `SHOP_VERIFY_TARGET=live` + `SHOP_VERIFY_MODE=playwright`
-2. **IMAP bot inbox** — `IMAP_*` + `BOT_INBOX_PROVIDER=imap`
-3. **Sentry** — set `SENTRY_DSN` (optional `@sentry/node`)
-4. **Stripe** — real `STRIPE_*` + price IDs for checkout
-5. **SMTP / Resend** — set `EMAIL_PROVIDER=smtp|resend` for real outreach mail
+**Code ready:** OpenAPI client + `/platform/discovery/tiktok/*` + worker queue `discovery-sync` + backoffice UI.
 
-## Next product slices
+**Still need in `.env` (from Partner Center app TIKA TICK):**
 
-1. Partner TikTok commerce sync → `ShopOrder`
-2. Automated discovery crawl → `CreatorDiscoveryProfile`
-3. Products catalog API (route reserved; no mock data)
-4. Outreach multi-touch sequences
+1. `TIKTOK_SHOP_APP_SECRET` — App & Service → app credentials  
+2. Enable scope **`seller.creator_marketplace.read`** on the app  
+3. Seller OAuth authorize a US shop → `TIKTOK_SHOP_ACCESS_TOKEN` (+ refresh)  
+4. `TIKTOK_SHOP_CIPHER` from Get Authorized Shops  
+5. Restart API + `npm run worker`, then backoffice Discovery → **Queue sync**
+
+Endpoint used: `POST /affiliate_seller/202508/marketplace_creators/search`
+
+## Still needs credentials / ops
+
+1. Live Seller Center verify URLs  
+2. IMAP bot inbox  
+3. Real Stripe / SMTP  
+4. Sentry DSN  
 
 ## Postman
 
-Import `postman/Tiksly-Affiliate-Tool.postman_collection.json` + `postman/Tiksly.environment.json`.
+Import `postman/Tiksly-Affiliate-Tool.postman_collection.json` + `Tiksly.environment.json`.  
+Regen: `node scripts/gen-postman.cjs`

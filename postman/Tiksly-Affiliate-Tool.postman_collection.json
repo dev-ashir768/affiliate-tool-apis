@@ -1117,6 +1117,31 @@
               "raw": "{\n  \"profiles\": [\n    {\n      \"handle\": \"import_a\",\n      \"region\": \"US\",\n      \"followerCount\": 1000\n    },\n    {\n      \"handle\": \"import_b\",\n      \"region\": \"UK\",\n      \"followerCount\": 2000\n    }\n  ]\n}"
             }
           }
+        },
+        {
+          "name": "TikTok Discovery Status",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/platform/discovery/tiktok/status"
+          }
+        },
+        {
+          "name": "TikTok Discovery Sync",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/platform/discovery/tiktok/sync",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"maxPages\": 2,\n  \"pageSize\": 20,\n  \"keyword\": null,\n  \"sync\": false\n}"
+            }
+          }
         }
       ]
     },
