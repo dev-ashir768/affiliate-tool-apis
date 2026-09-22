@@ -13,6 +13,9 @@ import {
 import { shopsRoutes } from "./modules/shops/shops.routes.js";
 import { creatorsRoutes } from "./modules/creators/creators.routes.js";
 import { outreachRoutes } from "./modules/outreach/outreach.routes.js";
+import { invitesRoutes } from "./modules/invites/invites.routes.js";
+import { automationsRoutes } from "./modules/automations/automations.routes.js";
+import { messagesRoutes } from "./modules/messages/messages.routes.js";
 import {
   discoveryRoutes,
   platformDiscoveryRoutes,
@@ -21,6 +24,7 @@ import {
   analyticsRoutes,
   ordersRoutes,
 } from "./modules/orders/orders.routes.js";
+import { samplesRoutes } from "./modules/samples/samples.routes.js";
 import { navigationRoutes } from "./modules/navigation/navigation.routes.js";
 import { platformRoutes } from "./modules/platform/platform.routes.js";
 
@@ -50,8 +54,12 @@ export function createApp() {
   app.use("/api/v1/shops", shopsRoutes);
   app.use("/api/v1/creators", creatorsRoutes);
   app.use("/api/v1/outreach", outreachRoutes);
+  app.use("/api/v1/invites", invitesRoutes);
+  app.use("/api/v1/automations", automationsRoutes);
+  app.use("/api/v1/messages", messagesRoutes);
   app.use("/api/v1/discovery", discoveryRoutes);
   app.use("/api/v1/orders", ordersRoutes);
+  app.use("/api/v1/samples", samplesRoutes);
   app.use("/api/v1/analytics", analyticsRoutes);
   app.use("/api/v1/navigation", navigationRoutes);
   app.use("/api/v1/platform", platformRoutes);

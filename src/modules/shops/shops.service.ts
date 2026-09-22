@@ -25,6 +25,9 @@ function toShopResponse(shop: {
   createdAt: Date;
   updatedAt: Date;
   botIdentity: { email: string } | null;
+  oauthConnectedAt?: Date | null;
+  tiktokGrantedScopes?: string[];
+  tiktokAccessExpiresAt?: Date | null;
 }) {
   return {
     id: shop.id,
@@ -39,6 +42,9 @@ function toShopResponse(shop: {
     verifiedAt: shop.verifiedAt,
     createdAt: shop.createdAt,
     updatedAt: shop.updatedAt,
+    oauthConnected: Boolean(shop.oauthConnectedAt),
+    oauthScopes: shop.tiktokGrantedScopes ?? [],
+    oauthAccessExpiresAt: shop.tiktokAccessExpiresAt?.toISOString() ?? null,
   };
 }
 
@@ -118,6 +124,15 @@ export async function disconnectShop(organizationId: string, shopId: string) {
       data: {
         status: "DISCONNECTED",
         botIdentityId: null,
+        tiktokOpenId: null,
+        tiktokAccessTokenEnc: null,
+        tiktokRefreshTokenEnc: null,
+        tiktokShopCipherEnc: null,
+        tiktokAccessExpiresAt: null,
+        tiktokRefreshExpiresAt: null,
+        tiktokGrantedScopes: [],
+        oauthConnectedAt: null,
+        statusReason: "Disconnected",
       },
       include: { botIdentity: true },
     });

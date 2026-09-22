@@ -7,8 +7,11 @@ import { requireRole } from "../../middleware/require-role.js";
 import { requirePlatform } from "../../middleware/require-platform.js";
 import {
   createDiscoveryProfileSchema,
+  discoveryCrawlPlanSchema,
+  discoveryMetricsRefreshSchema,
   discoverySearchSchema,
   importDiscoverySchema,
+  refreshCreatorMetricsSchema,
   tiktokDiscoverySyncSchema,
 } from "./discovery.schemas.js";
 import {
@@ -18,11 +21,21 @@ import {
   searchDiscovery,
 } from "./discovery.service.js";
 import {
+  enqueueCreatorMetricsRefresh,
   enqueueDiscoveryTikTokSync,
   getDiscoverySyncQueueStatus,
   getDiscoveryTikTokStatus,
+  getOrgDiscoveryTikTokStatus,
+  refreshOrgCreatorMetrics,
   syncDiscoveryFromTikTok,
 } from "./tiktok-sync.service.js";
+import {
+  enqueueDiscoveryCrawlPlan,
+  enqueueDiscoveryMetricsRefresh,
+  getDiscoveryCrawlStatus,
+  planDiscoveryCrawl,
+  refreshDiscoveryProfileMetrics,
+} from "./discovery-crawl.service.js";
 
 export const discoveryRoutes = Router();
 
@@ -37,7 +50,7 @@ discoveryRoutes.get(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 discoveryRoutes.post(
@@ -52,13 +65,116 @@ discoveryRoutes.post(
       }
       const creator = await saveDiscoveryToCrm(
         req.auth.orgId,
-        String(req.params.id)
+        String(req.params.id),
       );
       res.status(201).json(creator);
     } catch (err) {
       next(err);
     }
-  }
+  },
+);
+
+discoveryRoutes.get(
+  "/tiktok/status",
+  authenticate,
+  requireOrg,
+  async (req, res, next) => {
+    try {
+      if (!req.auth?.orgId) {
+        throw new AppError("UNAUTHORIZED", "Missing org", 401);
+      }
+      res.json(await getOrgDiscoveryTikTokStatus(req.auth.orgId));
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+discoveryRoutes.post(
+  "/tiktok/sync",
+  authenticate,
+  requireOrg,
+  requireRole("OWNER", "ADMIN"),
+  validateBody(tiktokDiscoverySyncSchema),
+  async (req, res, next) => {
+    try {
+      if (!req.auth?.orgId || !req.auth.sub) {
+        throw new AppError("UNAUTHORIZED", "Missing access token", 401);
+      }
+      const { sync, shopId, ...rest } = req.body as {
+        sync?: boolean;
+        shopId?: string | null;
+        maxPages?: number;
+        keyword?: string | null;
+        minFollowers?: number | null;
+        pageSize?: 12 | 20;
+        categoryIds?: string[] | null;
+        propagateCrm?: boolean;
+      };
+      if (!shopId) {
+        throw new AppError(
+          "VALIDATION_ERROR",
+          "shopId is required — authorize a TikTok shop first",
+          400,
+        );
+      }
+      const options = {
+        ...rest,
+        shopId,
+        organizationId: req.auth.orgId,
+      };
+      if (sync) {
+        res.json(await syncDiscoveryFromTikTok(req.auth.sub, options));
+        return;
+      }
+      res
+        .status(202)
+        .json(await enqueueDiscoveryTikTokSync(req.auth.sub, options));
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+discoveryRoutes.post(
+  "/tiktok/refresh-crm-metrics",
+  authenticate,
+  requireOrg,
+  requireRole("OWNER", "ADMIN"),
+  validateBody(refreshCreatorMetricsSchema),
+  async (req, res, next) => {
+    try {
+      if (!req.auth?.orgId || !req.auth.sub) {
+        throw new AppError("UNAUTHORIZED", "Missing access token", 401);
+      }
+      const { shopId, limit, sync } = req.body as {
+        shopId: string;
+        limit?: number;
+        sync?: boolean;
+      };
+      if (sync) {
+        res.json(
+          await refreshOrgCreatorMetrics({
+            organizationId: req.auth.orgId,
+            shopId,
+            actorUserId: req.auth.sub,
+            limit,
+          }),
+        );
+        return;
+      }
+      res.status(202).json(
+        await enqueueCreatorMetricsRefresh({
+          triggeredBy: req.auth.sub,
+          organizationId: req.auth.orgId,
+          shopId,
+          limit,
+        }),
+      );
+    } catch (err) {
+      next(err);
+    }
+  },
 );
 
 /** Platform staff manage the shared discovery index. */
@@ -75,12 +191,12 @@ platformDiscoveryRoutes.get(
         await searchDiscovery({
           ...(req.query as any),
           enabledOnly: false,
-        })
+        }),
       );
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 platformDiscoveryRoutes.post(
@@ -99,7 +215,7 @@ platformDiscoveryRoutes.post(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 platformDiscoveryRoutes.post(
@@ -112,13 +228,11 @@ platformDiscoveryRoutes.post(
       if (!req.auth?.sub) {
         throw new AppError("UNAUTHORIZED", "Missing access token", 401);
       }
-      res.json(
-        await importDiscoveryProfiles(req.body.profiles, req.auth.sub)
-      );
+      res.json(await importDiscoveryProfiles(req.body.profiles, req.auth.sub));
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 platformDiscoveryRoutes.get(
@@ -133,7 +247,7 @@ platformDiscoveryRoutes.get(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 platformDiscoveryRoutes.post(
@@ -146,12 +260,27 @@ platformDiscoveryRoutes.post(
       if (!req.auth?.sub) {
         throw new AppError("UNAUTHORIZED", "Missing access token", 401);
       }
-      const { sync, ...options } = req.body as {
+      const { sync, shopId, organizationId, ...rest } = req.body as {
         sync?: boolean;
+        shopId?: string | null;
+        organizationId?: string | null;
         maxPages?: number;
         keyword?: string | null;
         minFollowers?: number | null;
         pageSize?: 12 | 20;
+        categoryIds?: string[] | null;
+      };
+      if (shopId && !organizationId) {
+        throw new AppError(
+          "VALIDATION_ERROR",
+          "organizationId required with shopId",
+          400,
+        );
+      }
+      const options = {
+        ...rest,
+        shopId,
+        organizationId: organizationId ?? null,
       };
       if (sync) {
         res.json(await syncDiscoveryFromTikTok(req.auth.sub, options));
@@ -163,5 +292,89 @@ platformDiscoveryRoutes.post(
     } catch (err) {
       next(err);
     }
-  }
+  },
+);
+
+platformDiscoveryRoutes.get(
+  "/crawl/status",
+  authenticate,
+  requirePlatform("SUPERADMIN", "OPS"),
+  async (_req, res, next) => {
+    try {
+      res.json(await getDiscoveryCrawlStatus());
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+platformDiscoveryRoutes.post(
+  "/crawl/plan",
+  authenticate,
+  requirePlatform("SUPERADMIN", "OPS"),
+  validateBody(discoveryCrawlPlanSchema),
+  async (req, res, next) => {
+    try {
+      if (!req.auth?.sub) {
+        throw new AppError("UNAUTHORIZED", "Missing access token", 401);
+      }
+      const { sync, ...plan } = req.body as {
+        sync?: boolean;
+        shopId: string;
+        organizationId: string;
+        region?: "US" | "UK";
+        skipDays?: number;
+        maxPages?: number;
+        pageSize?: 12 | 20;
+        maxCells?: number;
+        followerBands?: number[];
+        keywords?: string[];
+      };
+      if (sync) {
+        res.json(await planDiscoveryCrawl(req.auth.sub, plan));
+        return;
+      }
+      res.status(202).json(await enqueueDiscoveryCrawlPlan(req.auth.sub, plan));
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+platformDiscoveryRoutes.post(
+  "/crawl/metrics-refresh",
+  authenticate,
+  requirePlatform("SUPERADMIN", "OPS"),
+  validateBody(discoveryMetricsRefreshSchema),
+  async (req, res, next) => {
+    try {
+      if (!req.auth?.sub) {
+        throw new AppError("UNAUTHORIZED", "Missing access token", 401);
+      }
+      const { sync, ...rest } = req.body as {
+        sync?: boolean;
+        shopId: string;
+        organizationId: string;
+        limit?: number;
+        olderThanHours?: number;
+      };
+      if (sync) {
+        res.json(
+          await refreshDiscoveryProfileMetrics({
+            ...rest,
+            actorUserId: req.auth.sub,
+          }),
+        );
+        return;
+      }
+      res.status(202).json(
+        await enqueueDiscoveryMetricsRefresh({
+          triggeredBy: req.auth.sub,
+          ...rest,
+        }),
+      );
+    } catch (err) {
+      next(err);
+    }
+  },
 );

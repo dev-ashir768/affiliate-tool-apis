@@ -67,17 +67,100 @@ const schema = z.object({
   SMTP_PASS: z.string().optional(),
   RESEND_API_KEY: z.string().optional(),
 
-  /** TikTok Shop OpenAPI — Affiliate Seller creator marketplace sync */
-  TIKTOK_SHOP_APP_KEY: z.string().min(1).optional(),
-  TIKTOK_SHOP_APP_SECRET: z.string().min(1).optional(),
-  TIKTOK_SHOP_ACCESS_TOKEN: z.string().min(1).optional(),
-  TIKTOK_SHOP_REFRESH_TOKEN: z.string().min(1).optional(),
-  TIKTOK_SHOP_CIPHER: z.string().min(1).optional(),
+  /** TikTok Shop OpenAPI — app credentials (Partner Center). Tokens live per Shop via OAuth. */
+  TIKTOK_SHOP_APP_KEY: z.preprocess(
+    (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+    z.string().min(1).optional(),
+  ),
+  TIKTOK_SHOP_APP_SECRET: z.preprocess(
+    (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+    z.string().min(1).optional(),
+  ),
+  /** Optional platform fallback tokens (dev / single-shop). Prefer per-Shop OAuth. */
+  TIKTOK_SHOP_ACCESS_TOKEN: z.preprocess(
+    (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+    z.string().min(1).optional(),
+  ),
+  TIKTOK_SHOP_REFRESH_TOKEN: z.preprocess(
+    (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+    z.string().min(1).optional(),
+  ),
+  TIKTOK_SHOP_CIPHER: z.preprocess(
+    (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+    z.string().min(1).optional(),
+  ),
   TIKTOK_SHOP_OPENAPI_BASE_URL: z
     .string()
     .url()
     .default("https://open-api.tiktokglobalshop.com"),
   TIKTOK_SHOP_REGION: z.enum(["US", "UK"]).default("US"),
+  /** Partner Center service / app id used on authorize URL (often same as app key or dedicated service_id). */
+  TIKTOK_SHOP_SERVICE_ID: z.preprocess(
+    (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+    z.string().min(1).optional(),
+  ),
+  TIKTOK_SHOP_AUTHORIZE_URL_US: z
+    .string()
+    .url()
+    .default("https://services.us.tiktokshop.com/open/authorize"),
+  TIKTOK_SHOP_AUTHORIZE_URL_UK: z
+    .string()
+    .url()
+    .default("https://services.tiktokshop.com/open/authorize"),
+  TIKTOK_SHOP_TOKEN_URL: z
+    .string()
+    .url()
+    .default("https://auth.tiktok-shops.com/api/v2/token/get"),
+  TIKTOK_SHOP_REFRESH_URL: z
+    .string()
+    .url()
+    .default("https://auth.tiktok-shops.com/api/v2/token/refresh"),
+  /** Portal callback that receives ?code=&state= then posts to API. */
+  TIKTOK_SHOP_REDIRECT_URI: z.preprocess(
+    (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+    z.string().url().optional(),
+  ),
+
+  /** Meilisearch — optional. When unset, discovery search uses Postgres only. */
+  MEILI_HOST: z.preprocess(
+    (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+    z.string().url().optional(),
+  ),
+  MEILI_API_KEY: z.preprocess(
+    (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+    z.string().min(1).optional(),
+  ),
+  MEILI_INDEX_DISCOVERY: z.string().default("discovery_creators"),
+
+  /**
+   * Multi-region crawl scheduler (worker registers BullMQ repeatable jobs).
+   * Requires org+shop OAuth per region you enable.
+   */
+  DISCOVERY_CRAWL_SCHEDULER_ENABLED: z
+    .enum(["true", "false", "1", "0"])
+    .default("false")
+    .transform((v) => v === "true" || v === "1"),
+  /** Cron expression (UTC). Default: every 6 hours. */
+  DISCOVERY_CRAWL_CRON: z.string().default("0 */6 * * *"),
+  DISCOVERY_CRAWL_MAX_CELLS: z.coerce.number().int().min(1).max(5_000).default(200),
+  DISCOVERY_CRAWL_SKIP_DAYS: z.coerce.number().int().min(0).max(90).default(7),
+  DISCOVERY_CRAWL_MAX_PAGES: z.coerce.number().int().min(1).max(20).default(10),
+  DISCOVERY_CRAWL_US_ORGANIZATION_ID: z.preprocess(
+    (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+    z.string().min(1).optional(),
+  ),
+  DISCOVERY_CRAWL_US_SHOP_ID: z.preprocess(
+    (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+    z.string().min(1).optional(),
+  ),
+  DISCOVERY_CRAWL_UK_ORGANIZATION_ID: z.preprocess(
+    (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+    z.string().min(1).optional(),
+  ),
+  DISCOVERY_CRAWL_UK_SHOP_ID: z.preprocess(
+    (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+    z.string().min(1).optional(),
+  ),
 });
 
 export type Env = z.infer<typeof schema>;

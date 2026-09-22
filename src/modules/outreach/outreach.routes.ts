@@ -6,12 +6,15 @@ import { requireOrg } from "../../middleware/require-org.js";
 import { requireRole } from "../../middleware/require-role.js";
 import { rateLimit, rateLimitKey } from "../../middleware/rate-limit.js";
 import {
+  bulkSendOutreachSchema,
   createTemplateSchema,
   patchTemplateSchema,
   sendOutreachSchema,
 } from "./outreach.schemas.js";
 import {
+  bulkSendOutreach,
   createTemplate,
+  getOutreachEmailStatus,
   listMessages,
   listTemplates,
   patchTemplate,
@@ -21,6 +24,14 @@ import {
 export const outreachRoutes = Router();
 
 outreachRoutes.use(authenticate, requireOrg);
+
+outreachRoutes.get("/email-status", async (_req, res, next) => {
+  try {
+    res.json(getOutreachEmailStatus());
+  } catch (err) {
+    next(err);
+  }
+});
 
 outreachRoutes.get("/templates", async (req, res, next) => {
   try {
@@ -42,7 +53,7 @@ outreachRoutes.post(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 outreachRoutes.patch(
@@ -53,12 +64,12 @@ outreachRoutes.patch(
     try {
       if (!req.auth?.orgId) throw new AppError("UNAUTHORIZED", "Missing org", 401);
       res.json(
-        await patchTemplate(req.auth.orgId, String(req.params.id), req.body)
+        await patchTemplate(req.auth.orgId, String(req.params.id), req.body),
       );
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 outreachRoutes.get("/messages", async (req, res, next) => {
@@ -82,5 +93,31 @@ outreachRoutes.post(
     } catch (err) {
       next(err);
     }
-  }
+  },
+);
+
+outreachRoutes.post(
+  "/send-bulk",
+  requireRole("OWNER", "ADMIN"),
+  rateLimit({
+    key: rateLimitKey("outreach-bulk"),
+    windowSec: 60,
+    limit: 10,
+  }),
+  validateBody(bulkSendOutreachSchema),
+  async (req, res, next) => {
+    try {
+      if (!req.auth?.orgId || !req.auth.sub) {
+        throw new AppError("UNAUTHORIZED", "Missing org", 401);
+      }
+      const result = await bulkSendOutreach(
+        req.auth.orgId,
+        req.auth.sub,
+        req.body,
+      );
+      res.status(result.status === "QUEUED" ? 202 : 200).json(result);
+    } catch (err) {
+      next(err);
+    }
+  },
 );

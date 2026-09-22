@@ -1,0 +1,21 @@
+﻿export const DISCOVERY_KEYWORDS_US: string[] = [
+  "skincare","beauty","makeup","fashion","fitness","gym","home","kitchen","cooking","tech",
+  "gadgets","pets","dog","cat","baby","mom","parenting","travel","outdoors","camping",
+  "gaming","sports","yoga","wellness","hair","nails","jewelry","watches","shoes","bags",
+  "furniture","decor","cleaning","organization","automotive","car","tools","diy","gardening","plants",
+  "food","snacks","coffee","tea","supplements","vitamins","weight loss","mens fashion","womens fashion","streetwear",
+  "luxury","amazon finds","tiktok shop","review","unboxing","haul","grwm","asmr","lifestyle","minimalist",
+  "productivity","office","stationery","phone case","headphones","camera","photography","fragrance","perfume","body care",
+  "sunscreen","acne","anti aging","protein","pre workout","running","cycling","hiking","golf","basketball",
+  "soccer","swim","beach","party","wedding","gifts","holiday","christmas","halloween","back to school",
+  "college","dorm","apartment","storage","laundry","bedding","bathroom","candles","craft","sewing",
+  "art","music","books","kids toys","anime","cosplay","board games","smart home","vacuum","air fryer",
+  "blender","water bottle","meal prep","keto","vegan","organic","wine","grilling","bbq","cookware",
+  "dessert","smoothie","energy drink","collagen","probiotics","sleep","massage","resistance bands","dumbbells","camping tent",
+  "sunglasses","sneakers","activewear","leggings","hoodie","dress","jeans","swimwear","power bank","laptop stand",
+  "keyboard","microphone","tripod","led lights","soundbar","earbuds","dash cam","pet food","dog treats","diapers",
+  "stroller","maternity","foundation","lipstick","mascara","shampoo","moisturizer","serum","retinol","face mask",
+  "cleanser","blue light glasses","luggage","backpack","protein bar","olive oil","seasoning","pasta","frozen meals","self care",
+  "bath bomb","multivitamin","air purifier","smart plug","extension cord","flashlight","drill","paint","laundry detergent","garden hose",
+  "planter","lawn mower","snow shovel","phone charger","watch band","shapewear","posture corrector","humidifier","thermostat","surge protector"
+];

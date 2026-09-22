@@ -7,23 +7,28 @@ import { requireRole } from "../../middleware/require-role.js";
 import { rateLimit, rateLimitKey } from "../../middleware/rate-limit.js";
 import {
   addListMemberSchema,
+  bulkAddListMembersSchema,
   createCampaignSchema,
   createCreatorListSchema,
   createCreatorSchema,
   patchCampaignSchema,
   patchCreatorSchema,
+  runCampaignAcrossShopsSchema,
 } from "./creators.schemas.js";
 import {
   addCreatorToList,
+  bulkAddCreatorsToList,
   createCampaign,
   createCreator,
   createCreatorList,
   deleteCreator,
   listCampaigns,
+  listCreatorListMembers,
   listCreatorLists,
   listCreators,
   patchCampaign,
   patchCreator,
+  runCampaignAcrossShops,
 } from "./creators.service.js";
 
 export const creatorsRoutes = Router();
@@ -32,7 +37,8 @@ creatorsRoutes.use(authenticate, requireOrg);
 
 creatorsRoutes.get("/", async (req, res, next) => {
   try {
-    if (!req.auth?.orgId) throw new AppError("UNAUTHORIZED", "Missing org", 401);
+    if (!req.auth?.orgId)
+      throw new AppError("UNAUTHORIZED", "Missing org", 401);
     res.json(await listCreators(req.auth.orgId));
   } catch (err) {
     next(err);
@@ -46,17 +52,19 @@ creatorsRoutes.post(
   validateBody(createCreatorSchema),
   async (req, res, next) => {
     try {
-      if (!req.auth?.orgId) throw new AppError("UNAUTHORIZED", "Missing org", 401);
+      if (!req.auth?.orgId)
+        throw new AppError("UNAUTHORIZED", "Missing org", 401);
       res.status(201).json(await createCreator(req.auth.orgId, req.body));
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 creatorsRoutes.get("/lists", async (req, res, next) => {
   try {
-    if (!req.auth?.orgId) throw new AppError("UNAUTHORIZED", "Missing org", 401);
+    if (!req.auth?.orgId)
+      throw new AppError("UNAUTHORIZED", "Missing org", 401);
     res.json(await listCreatorLists(req.auth.orgId));
   } catch (err) {
     next(err);
@@ -69,12 +77,13 @@ creatorsRoutes.post(
   validateBody(createCreatorListSchema),
   async (req, res, next) => {
     try {
-      if (!req.auth?.orgId) throw new AppError("UNAUTHORIZED", "Missing org", 401);
+      if (!req.auth?.orgId)
+        throw new AppError("UNAUTHORIZED", "Missing org", 401);
       res.status(201).json(await createCreatorList(req.auth.orgId, req.body));
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 creatorsRoutes.post(
@@ -83,23 +92,62 @@ creatorsRoutes.post(
   validateBody(addListMemberSchema),
   async (req, res, next) => {
     try {
-      if (!req.auth?.orgId) throw new AppError("UNAUTHORIZED", "Missing org", 401);
-      res.status(201).json(
-        await addCreatorToList(
-          req.auth.orgId,
-          String(req.params.listId),
-          req.body.creatorId
-        )
-      );
+      if (!req.auth?.orgId)
+        throw new AppError("UNAUTHORIZED", "Missing org", 401);
+      res
+        .status(201)
+        .json(
+          await addCreatorToList(
+            req.auth.orgId,
+            String(req.params.listId),
+            req.body.creatorId,
+          ),
+        );
     } catch (err) {
       next(err);
     }
+  },
+);
+
+creatorsRoutes.get("/lists/:listId/members", async (req, res, next) => {
+  try {
+    if (!req.auth?.orgId)
+      throw new AppError("UNAUTHORIZED", "Missing org", 401);
+    res.json(
+      await listCreatorListMembers(req.auth.orgId, String(req.params.listId)),
+    );
+  } catch (err) {
+    next(err);
   }
+});
+
+creatorsRoutes.post(
+  "/lists/:listId/members/bulk",
+  requireRole("OWNER", "ADMIN", "MEMBER"),
+  validateBody(bulkAddListMembersSchema),
+  async (req, res, next) => {
+    try {
+      if (!req.auth?.orgId)
+        throw new AppError("UNAUTHORIZED", "Missing org", 401);
+      res
+        .status(201)
+        .json(
+          await bulkAddCreatorsToList(
+            req.auth.orgId,
+            String(req.params.listId),
+            req.body.creatorIds,
+          ),
+        );
+    } catch (err) {
+      next(err);
+    }
+  },
 );
 
 creatorsRoutes.get("/campaigns", async (req, res, next) => {
   try {
-    if (!req.auth?.orgId) throw new AppError("UNAUTHORIZED", "Missing org", 401);
+    if (!req.auth?.orgId)
+      throw new AppError("UNAUTHORIZED", "Missing org", 401);
     res.json(await listCampaigns(req.auth.orgId));
   } catch (err) {
     next(err);
@@ -112,12 +160,13 @@ creatorsRoutes.post(
   validateBody(createCampaignSchema),
   async (req, res, next) => {
     try {
-      if (!req.auth?.orgId) throw new AppError("UNAUTHORIZED", "Missing org", 401);
+      if (!req.auth?.orgId)
+        throw new AppError("UNAUTHORIZED", "Missing org", 401);
       res.status(201).json(await createCampaign(req.auth.orgId, req.body));
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 creatorsRoutes.patch(
@@ -126,14 +175,40 @@ creatorsRoutes.patch(
   validateBody(patchCampaignSchema),
   async (req, res, next) => {
     try {
-      if (!req.auth?.orgId) throw new AppError("UNAUTHORIZED", "Missing org", 401);
+      if (!req.auth?.orgId)
+        throw new AppError("UNAUTHORIZED", "Missing org", 401);
       res.json(
-        await patchCampaign(req.auth.orgId, String(req.params.id), req.body)
+        await patchCampaign(req.auth.orgId, String(req.params.id), req.body),
       );
     } catch (err) {
       next(err);
     }
-  }
+  },
+);
+
+creatorsRoutes.post(
+  "/campaigns/:id/multi-shop-run",
+  requireRole("OWNER", "ADMIN"),
+  validateBody(runCampaignAcrossShopsSchema),
+  async (req, res, next) => {
+    try {
+      if (!req.auth?.orgId) {
+        throw new AppError("UNAUTHORIZED", "Missing org", 401);
+      }
+      res
+        .status(202)
+        .json(
+          await runCampaignAcrossShops(
+            req.auth.orgId,
+            String(req.params.id),
+            req.auth.sub,
+            req.body,
+          ),
+        );
+    } catch (err) {
+      next(err);
+    }
+  },
 );
 
 creatorsRoutes.patch(
@@ -142,12 +217,15 @@ creatorsRoutes.patch(
   validateBody(patchCreatorSchema),
   async (req, res, next) => {
     try {
-      if (!req.auth?.orgId) throw new AppError("UNAUTHORIZED", "Missing org", 401);
-      res.json(await patchCreator(req.auth.orgId, String(req.params.id), req.body));
+      if (!req.auth?.orgId)
+        throw new AppError("UNAUTHORIZED", "Missing org", 401);
+      res.json(
+        await patchCreator(req.auth.orgId, String(req.params.id), req.body),
+      );
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 creatorsRoutes.delete(
@@ -155,10 +233,11 @@ creatorsRoutes.delete(
   requireRole("OWNER", "ADMIN"),
   async (req, res, next) => {
     try {
-      if (!req.auth?.orgId) throw new AppError("UNAUTHORIZED", "Missing org", 401);
+      if (!req.auth?.orgId)
+        throw new AppError("UNAUTHORIZED", "Missing org", 401);
       res.json(await deleteCreator(req.auth.orgId, String(req.params.id)));
     } catch (err) {
       next(err);
     }
-  }
+  },
 );

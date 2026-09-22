@@ -120,10 +120,71 @@ enum OutreachStatus {
   FAILED
 }
 
+enum AffiliateInviteStatus {
+  DRAFT
+  QUEUED
+  SENT
+  PARTIAL
+  FAILED
+}
+
+enum AffiliateInviteRecipientStatus {
+  PENDING
+  INVITED
+  CONFLICT
+  SKIPPED
+  FAILED
+}
+
+enum AutomationRunStatus {
+  QUEUED
+  RUNNING
+  COMPLETED
+  PARTIAL
+  FAILED
+  CANCELED
+}
+
+enum AutomationStepKind {
+  EMAIL
+  AFFILIATE_INVITE
+  CREATOR_IM
+}
+
+enum AutomationStepStatus {
+  PENDING
+  RUNNING
+  DONE
+  SKIPPED
+  FAILED
+}
+
+enum ImMessageDirection {
+  INBOUND
+  OUTBOUND
+  SYSTEM
+}
+
+enum ImMessageStatus {
+  RECEIVED
+  SENT
+  FAILED
+}
+
 enum OrderStatus {
   PENDING
   PAID
   REFUNDED
+  CANCELED
+}
+
+enum SampleRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  FULFILLING
+  FULFILLED
+  FAILED
   CANCELED
 }
 
@@ -182,8 +243,12 @@ model Organization {
   campaigns        Campaign[]
   outreachTemplates OutreachTemplate[]
   outreachMessages  OutreachMessage[]
+  affiliateInvites  AffiliateInvite[]
+  automationRuns    AutomationRun[]
+  creatorConversations CreatorConversation[]
   shopOrders       ShopOrder[]
   commissions      Commission[]
+  sampleRequests   SampleRequest[]
 }
 
 model Membership {
@@ -250,8 +315,21 @@ model Shop {
   statusReason           String?
   sessionVaultCiphertext String?
   verifiedAt             DateTime?
+  /// Seller OpenAPI OAuth (per-merchant). Tokens encrypted with SESSION_VAULT_KEY.
+  tiktokOpenId           String?
+  tiktokAccessTokenEnc   String?
+  tiktokRefreshTokenEnc  String?
+  tiktokShopCipherEnc    String?
+  tiktokAccessExpiresAt  DateTime?
+  tiktokRefreshExpiresAt DateTime?
+  tiktokGrantedScopes    String[]     @default([])
+  oauthConnectedAt       DateTime?
   verificationJobs       ShopVerificationJob[]
   shopOrders             ShopOrder[]
+  affiliateInvites       AffiliateInvite[]
+  automationRuns         AutomationRun[]
+  creatorConversations   CreatorConversation[]
+  sampleRequests         SampleRequest[]
   createdAt              DateTime     @default(now())
   updatedAt              DateTime     @updatedAt
 
@@ -373,21 +451,49 @@ model Creator {
   platform       CreatorPlatform @default(TIKTOK)
   handle         String
   displayName    String?
+  /// TikTok creator open_id from marketplace search (required for affiliate invites).
+  creatorOpenId  String?
+  /// TikTok IM user id (from conversation APIs).
+  creatorImId    String?
   contactEmail   String?
   region         ShopRegion?
   followerCount  Int?
+  avatarUrl      String?
+  /// Marketplace affiliate GMV snapshot from TikTok (not shop order GMV).
+  gmvAmount      String?
+  gmvCurrency    String?
+  gmvRange       String?
+  videoGmvAmount String?
+  liveGmvAmount  String?
+  productCardGmvAmount String?
+  avgCommissionRange String?
+  unitsSold      Int?
+  gpmAmount      String?
+  gpmCurrency    String?
+  gpmRange       String?
+  /// Raw TikTok marketplace creator payload (forward-compatible).
+  metricsRaw     Json?
+  /// Last time marketplace metrics were refreshed from TikTok.
+  metricsSyncedAt DateTime?
   notes          String?
   stage          CreatorStage    @default(LEAD)
   listMembers    CreatorListMember[]
   outreachMessages OutreachMessage[]
+  affiliateInviteRecipients AffiliateInviteRecipient[]
+  conversations  CreatorConversation[]
   shopOrders     ShopOrder[]
   commissions    Commission[]
+  sampleRequests SampleRequest[]
   createdAt      DateTime        @default(now())
   updatedAt      DateTime        @updatedAt
 
   @@unique([organizationId, platform, handle])
   @@index([organizationId])
   @@index([stage])
+  @@index([creatorOpenId])
+  @@index([creatorImId])
+  @@index([followerCount])
+  @@index([metricsSyncedAt])
 }
 
 model CreatorList {
@@ -426,11 +532,162 @@ model Campaign {
   offerNote      String?
   deadline       DateTime?
   outreachMessages OutreachMessage[]
+  affiliateInvites AffiliateInvite[]
+  automationRuns   AutomationRun[]
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
 
   @@index([organizationId])
   @@index([status])
+}
+
+/// TikTok Shop target collaboration (private affiliate invite) for a shop.
+model AffiliateInvite {
+  id                        String                 @id @default(cuid())
+  organizationId            String
+  organization              Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  shopId                    String
+  shop                      Shop                   @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  campaignId                String?
+  campaign                  Campaign?              @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  name                      String
+  message                   String?
+  endAt                     DateTime
+  sellerContactEmail        String?
+  hasFreeSample             Boolean                @default(false)
+  sampleApprovalExempt      Boolean                @default(false)
+  /// [{ id, targetCommissionRate }] — rate in TikTok units (hundredths of a percent; 1000 = 10%).
+  products                  Json
+  externalCollaborationId   String?
+  status                    AffiliateInviteStatus  @default(DRAFT)
+  lastError                 String?
+  conflicts                 Json?
+  sentAt                    DateTime?
+  recipients                AffiliateInviteRecipient[]
+  sampleRequests            SampleRequest[]
+  createdAt                 DateTime               @default(now())
+  updatedAt                 DateTime               @updatedAt
+
+  @@index([organizationId])
+  @@index([shopId])
+  @@index([campaignId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model AffiliateInviteRecipient {
+  id             String                         @id @default(cuid())
+  inviteId       String
+  invite         AffiliateInvite                @relation(fields: [inviteId], references: [id], onDelete: Cascade)
+  creatorId      String
+  creator        Creator                        @relation(fields: [creatorId], references: [id], onDelete: Cascade)
+  creatorOpenId  String
+  status         AffiliateInviteRecipientStatus @default(PENDING)
+  lastError      String?
+  createdAt      DateTime                       @default(now())
+  updatedAt      DateTime                       @updatedAt
+
+  @@unique([inviteId, creatorId])
+  @@index([creatorId])
+  @@index([status])
+}
+
+/// Multi-step outreach automation (email → TikTok invite) executed by BullMQ workers.
+model AutomationRun {
+  id             String              @id @default(cuid())
+  organizationId String
+  organization   Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  campaignId     String?
+  campaign       Campaign?           @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  shopId         String?
+  shop           Shop?               @relation(fields: [shopId], references: [id], onDelete: SetNull)
+  name           String
+  status         AutomationRunStatus @default(QUEUED)
+  /// Snapshot of creator ids targeted by this run.
+  creatorIds     String[]
+  lastError      String?
+  startedAt      DateTime?
+  completedAt    DateTime?
+  steps          AutomationRunStep[]
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+
+  @@index([organizationId])
+  @@index([campaignId])
+  @@index([shopId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model AutomationRunStep {
+  id           String                @id @default(cuid())
+  runId        String
+  run          AutomationRun         @relation(fields: [runId], references: [id], onDelete: Cascade)
+  stepIndex    Int
+  kind         AutomationStepKind
+  status       AutomationStepStatus  @default(PENDING)
+  delayMinutes Int                   @default(0)
+  /// Step config snapshot (templateId / invite products / etc).
+  config       Json
+  result       Json?
+  lastError    String?
+  scheduledAt  DateTime?
+  startedAt    DateTime?
+  finishedAt   DateTime?
+  createdAt    DateTime              @default(now())
+  updatedAt    DateTime              @updatedAt
+
+  @@unique([runId, stepIndex])
+  @@index([status])
+}
+
+/// Cached TikTok Shop ↔ creator IM conversation (affiliate seller messaging).
+model CreatorConversation {
+  id                      String               @id @default(cuid())
+  organizationId          String
+  organization            Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  shopId                  String
+  shop                    Shop                 @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  creatorId               String?
+  creator                 Creator?             @relation(fields: [creatorId], references: [id], onDelete: SetNull)
+  externalConversationId  String
+  creatorImId             String?
+  creatorUsername         String?
+  avatarUrl               String?
+  unreadCount             Int                  @default(0)
+  lastMessagePreview      String?
+  lastMessageAt           DateTime?
+  lastSyncedAt            DateTime?
+  messages                CreatorImMessage[]
+  createdAt               DateTime             @default(now())
+  updatedAt               DateTime             @updatedAt
+
+  @@unique([shopId, externalConversationId])
+  @@index([organizationId])
+  @@index([creatorId])
+  @@index([creatorImId])
+  @@index([updatedAt])
+}
+
+model CreatorImMessage {
+  id                 String             @id @default(cuid())
+  conversationId     String
+  conversation       CreatorConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  externalMessageId  String?
+  direction          ImMessageDirection
+  msgType            String             @default("TEXT")
+  contentText        String?
+  contentRaw         String?
+  senderImId         String?
+  status             ImMessageStatus    @default(RECEIVED)
+  lastError          String?
+  sentAt             DateTime?
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  @@index([conversationId])
+  @@index([externalMessageId])
+  @@index([sentAt])
 }
 
 model OutreachTemplate {
@@ -473,18 +730,43 @@ model OutreachMessage {
   @@index([status])
 }
 
-/// Platform-wide creator index. Populated by staff import/manual — not live TikTok scrape.
+/// Platform-wide creator marketplace index. Re-sync overwrites metrics (followers/GMV).
 model CreatorDiscoveryProfile {
   id            String          @id @default(cuid())
   platform      CreatorPlatform @default(TIKTOK)
   handle        String
   displayName   String?
+  /// TikTok creator open_id — required to send target collaboration invites.
+  creatorOpenId String?
   region        ShopRegion?
   followerCount Int?
+  avatarUrl     String?
+  /// Marketplace affiliate GMV snapshot (string amount as returned by TikTok).
+  gmvAmount     String?
+  gmvCurrency   String?
+  gmvRange      String?
+  /// Parsed major-unit GMV → integer cents (null when range-only / unparsable).
+  gmvCents      Int?
+  videoGmvAmount String?
+  liveGmvAmount  String?
+  productCardGmvAmount String?
+  avgCommissionRange String?
+  unitsSold     Int?
+  gpmAmount     String?
+  gpmCurrency   String?
+  gpmRange      String?
+  /// Opt-in contact email when TikTok returns it.
+  contactEmail  String?
+  /// Raw TikTok marketplace creator payload (forward-compatible).
+  metricsRaw    Json?
   categories    String[]
   bio           String?
   source        String          @default("manual")
   enabled       Boolean         @default(true)
+  /// Last TikTok marketplace metrics refresh.
+  metricsSyncedAt DateTime?
+  /// Last time a crawl cell upserted this row (may equal metricsSyncedAt).
+  lastCrawledAt DateTime?
   createdAt     DateTime        @default(now())
   updatedAt     DateTime        @updatedAt
 
@@ -492,6 +774,50 @@ model CreatorDiscoveryProfile {
   @@index([region])
   @@index([followerCount])
   @@index([enabled])
+  @@index([creatorOpenId])
+  @@index([metricsSyncedAt])
+  @@index([source])
+  @@index([enabled, region, followerCount])
+  @@index([enabled, unitsSold])
+  @@index([enabled, gmvCents])
+}
+
+/// Tracks crawl-grid cells (keyword × region × follower band) for planner skip / ops.
+model DiscoveryCrawlCell {
+  id           String     @id @default(cuid())
+  cellKey      String     @unique
+  region       ShopRegion
+  keyword      String
+  minFollowers Int?
+  lastRunAt    DateTime?
+  lastStatus   String?
+  lastImported Int        @default(0)
+  lastUpdated  Int        @default(0)
+  lastError    String?
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  @@index([region])
+  @@index([lastRunAt])
+  @@index([lastStatus])
+}
+
+/// Editable crawl keyword grid terms (ops CRUD). region null = applies to all regions.
+model DiscoveryCrawlTerm {
+  id        String      @id @default(cuid())
+  keyword   String
+  /// null = all regions; otherwise US or UK only.
+  region    ShopRegion?
+  /// Denormalized unique key: ALL | US | UK (Postgres unique treats NULL as distinct).
+  regionKey String      @default("ALL")
+  enabled   Boolean     @default(true)
+  sortOrder Int         @default(0)
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  @@unique([keyword, regionKey])
+  @@index([enabled, sortOrder])
+  @@index([region])
 }
 
 model ShopOrder {
@@ -535,4 +861,40 @@ model Commission {
   @@index([orderId])
   @@index([creatorId])
   @@index([status])
+}
+
+/// TikTok Shop free-sample application tracked in CRM (approve / reject / fulfill).
+model SampleRequest {
+  id                    String              @id @default(cuid())
+  organizationId        String
+  organization          Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  shopId                String
+  shop                  Shop                @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  creatorId             String?
+  creator               Creator?            @relation(fields: [creatorId], references: [id], onDelete: SetNull)
+  affiliateInviteId     String?
+  affiliateInvite       AffiliateInvite?    @relation(fields: [affiliateInviteId], references: [id], onDelete: SetNull)
+  externalApplicationId String?
+  externalProductId     String?
+  productTitle          String?
+  creatorUsername       String?
+  creatorOpenId         String?
+  status                SampleRequestStatus @default(PENDING)
+  reviewNote            String?
+  lastError             String?
+  products              Json?
+  fulfillmentRaw        Json?
+  metricsRaw            Json?
+  requestedAt           DateTime?
+  reviewedAt            DateTime?
+  fulfilledAt           DateTime?
+  createdAt             DateTime            @default(now())
+  updatedAt             DateTime            @updatedAt
+
+  @@unique([organizationId, externalApplicationId])
+  @@index([organizationId, status])
+  @@index([shopId])
+  @@index([creatorId])
+  @@index([affiliateInviteId])
+  @@index([requestedAt])
 }

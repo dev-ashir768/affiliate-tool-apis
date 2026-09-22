@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { z } from "zod";
 import { AppError } from "../../lib/errors.js";
 import { validateBody } from "../../middleware/validate.js";
 import { authenticate } from "../../middleware/authenticate.js";
@@ -13,8 +14,23 @@ import {
   listShops,
 } from "./shops.service.js";
 import { requestVerify } from "./verify.service.js";
+import {
+  completeTikTokShopOAuth,
+  getTikTokOAuthStatus,
+  startTikTokShopOAuth,
+} from "./tiktok-oauth.service.js";
 
 export const shopsRoutes = Router();
+
+const oauthStartSchema = z.object({
+  region: z.enum(["US", "UK"]).default("US"),
+  shopId: z.string().min(1).optional().nullable(),
+});
+
+const oauthCompleteSchema = z.object({
+  code: z.string().min(1),
+  state: z.string().min(1),
+});
 
 shopsRoutes.get("/", authenticate, requireOrg, async (req, res, next) => {
   try {
@@ -27,6 +43,75 @@ shopsRoutes.get("/", authenticate, requireOrg, async (req, res, next) => {
     next(err);
   }
 });
+
+shopsRoutes.get(
+  "/tiktok/oauth/status",
+  authenticate,
+  requireOrg,
+  async (_req, res, next) => {
+    try {
+      res.json(getTikTokOAuthStatus());
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+shopsRoutes.post(
+  "/tiktok/oauth/start",
+  authenticate,
+  requireOrg,
+  requireRole("OWNER", "ADMIN"),
+  rateLimit({
+    key: rateLimitKey("tiktok-oauth-start"),
+    windowSec: 60,
+    limit: 10,
+  }),
+  validateBody(oauthStartSchema),
+  async (req, res, next) => {
+    try {
+      if (!req.auth?.orgId || !req.auth.sub) {
+        throw new AppError("UNAUTHORIZED", "Missing access token", 401);
+      }
+      const result = await startTikTokShopOAuth({
+        organizationId: req.auth.orgId,
+        userId: req.auth.sub,
+        region: req.body.region,
+        shopId: req.body.shopId,
+      });
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+shopsRoutes.post(
+  "/tiktok/oauth/complete",
+  authenticate,
+  requireOrg,
+  requireRole("OWNER", "ADMIN"),
+  rateLimit({
+    key: rateLimitKey("tiktok-oauth-complete"),
+    windowSec: 60,
+    limit: 20,
+  }),
+  validateBody(oauthCompleteSchema),
+  async (req, res, next) => {
+    try {
+      const shop = await completeTikTokShopOAuth({
+        code: req.body.code,
+        state: req.body.state,
+      });
+      if (shop.organizationId !== req.auth?.orgId) {
+        throw new AppError("FORBIDDEN", "OAuth shop org mismatch", 403);
+      }
+      res.json(shop);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
 
 shopsRoutes.post(
   "/connect",
@@ -47,7 +132,7 @@ shopsRoutes.post(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 shopsRoutes.get("/:id", authenticate, requireOrg, async (req, res, next) => {
@@ -82,7 +167,7 @@ shopsRoutes.post(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 shopsRoutes.delete(
@@ -100,5 +185,5 @@ shopsRoutes.delete(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );

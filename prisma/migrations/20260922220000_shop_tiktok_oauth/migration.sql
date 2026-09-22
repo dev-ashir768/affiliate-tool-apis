@@ -1,0 +1,9 @@
+-- Per-merchant TikTok Shop OpenAPI OAuth credentials on Shop
+ALTER TABLE "Shop" ADD COLUMN IF NOT EXISTS "tiktokOpenId" TEXT;
+ALTER TABLE "Shop" ADD COLUMN IF NOT EXISTS "tiktokAccessTokenEnc" TEXT;
+ALTER TABLE "Shop" ADD COLUMN IF NOT EXISTS "tiktokRefreshTokenEnc" TEXT;
+ALTER TABLE "Shop" ADD COLUMN IF NOT EXISTS "tiktokShopCipherEnc" TEXT;
+ALTER TABLE "Shop" ADD COLUMN IF NOT EXISTS "tiktokAccessExpiresAt" TIMESTAMP(3);
+ALTER TABLE "Shop" ADD COLUMN IF NOT EXISTS "tiktokRefreshExpiresAt" TIMESTAMP(3);
+ALTER TABLE "Shop" ADD COLUMN IF NOT EXISTS "tiktokGrantedScopes" TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[];
+ALTER TABLE "Shop" ADD COLUMN IF NOT EXISTS "oauthConnectedAt" TIMESTAMP(3);

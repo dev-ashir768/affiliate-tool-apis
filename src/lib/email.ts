@@ -6,6 +6,7 @@ import { logger } from "./logger.js";
 import { PasswordResetEmail } from "../emails/password-reset.js";
 import { OrgInviteEmail } from "../emails/org-invite.js";
 import { StaffWelcomeEmail } from "../emails/staff-welcome.js";
+import { OutreachEmail } from "../emails/outreach.js";
 
 export type EmailMessage = {
   to: string;
@@ -17,6 +18,15 @@ export type EmailMessage = {
 export interface EmailProvider {
   send(message: EmailMessage): Promise<void>;
 }
+
+export type EmailDeliveryStatus = {
+  provider: "console" | "smtp" | "resend";
+  fromSet: boolean;
+  live: boolean;
+  ready: boolean;
+  missing: string[];
+  note: string;
+};
 
 function portalOrigin(): string {
   const origin =
@@ -69,19 +79,104 @@ class SmtpEmailProvider implements EmailProvider {
   }
 }
 
+class ResendEmailProvider implements EmailProvider {
+  async send(message: EmailMessage): Promise<void> {
+    if (!env.RESEND_API_KEY || !env.EMAIL_FROM) {
+      throw new Error(
+        "RESEND_API_KEY and EMAIL_FROM are required for resend provider",
+      );
+    }
+    const res = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${env.RESEND_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        from: env.EMAIL_FROM,
+        to: [message.to],
+        subject: message.subject,
+        text: message.text,
+        html: message.html ?? message.text,
+      }),
+    });
+    const json = (await res.json().catch(() => ({}))) as {
+      message?: string;
+      name?: string;
+      id?: string;
+    };
+    if (!res.ok) {
+      throw new Error(
+        json.message ?? json.name ?? `Resend error (HTTP ${res.status})`,
+      );
+    }
+    logger.info("email.send (resend)", {
+      to: message.to,
+      subject: message.subject,
+      id: json.id,
+    });
+  }
+}
+
 let cached: EmailProvider | null = null;
+
+export function getEmailDeliveryStatus(): EmailDeliveryStatus {
+  const provider = env.EMAIL_PROVIDER;
+  const missing: string[] = [];
+  if (!env.EMAIL_FROM) missing.push("EMAIL_FROM");
+
+  if (provider === "smtp") {
+    if (!env.SMTP_HOST) missing.push("SMTP_HOST");
+    const ready = missing.length === 0;
+    return {
+      provider,
+      fromSet: Boolean(env.EMAIL_FROM),
+      live: true,
+      ready,
+      missing,
+      note: ready
+        ? "SMTP ready for live outreach."
+        : `SMTP incomplete: set ${missing.join(", ")}.`,
+    };
+  }
+
+  if (provider === "resend") {
+    if (!env.RESEND_API_KEY) missing.push("RESEND_API_KEY");
+    const ready = missing.length === 0;
+    return {
+      provider,
+      fromSet: Boolean(env.EMAIL_FROM),
+      live: true,
+      ready,
+      missing,
+      note: ready
+        ? "Resend ready for live outreach."
+        : `Resend incomplete: set ${missing.join(", ")}.`,
+    };
+  }
+
+  return {
+    provider: "console",
+    fromSet: Boolean(env.EMAIL_FROM),
+    live: false,
+    ready: env.NODE_ENV !== "production",
+    missing:
+      env.NODE_ENV === "production" ? ["EMAIL_PROVIDER=smtp|resend"] : [],
+    note:
+      env.NODE_ENV === "production"
+        ? "Console email is not allowed for outreach in production. Set EMAIL_PROVIDER=smtp or resend."
+        : "Console provider logs emails only (dev). Set EMAIL_PROVIDER=smtp or resend for live delivery.",
+  };
+}
 
 export function getEmailProvider(): EmailProvider {
   if (cached) return cached;
 
   if (env.EMAIL_PROVIDER === "smtp") {
     cached = new SmtpEmailProvider();
+  } else if (env.EMAIL_PROVIDER === "resend") {
+    cached = new ResendEmailProvider();
   } else {
-    if (env.EMAIL_PROVIDER === "resend") {
-      logger.info(
-        "EMAIL_PROVIDER=resend not implemented; using console. Prefer EMAIL_PROVIDER=smtp.",
-      );
-    }
     cached = new ConsoleEmailProvider();
   }
   return cached;
@@ -99,6 +194,24 @@ async function dispatch(
 ) {
   const html = await render(element);
   await getEmailProvider().send({ to, subject, text, html });
+}
+
+export async function sendOutreachEmail(input: {
+  to: string;
+  subject: string;
+  bodyText: string;
+}) {
+  const logoUrl = emailLogoUrl();
+  await dispatch(
+    input.to,
+    input.subject,
+    input.bodyText,
+    React.createElement(OutreachEmail, {
+      logoUrl,
+      preview: input.subject,
+      bodyText: input.bodyText,
+    }),
+  );
 }
 
 export async function sendPasswordResetEmail(input: {
