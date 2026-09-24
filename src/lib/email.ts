@@ -7,6 +7,9 @@ import { PasswordResetEmail } from "../emails/password-reset.js";
 import { OrgInviteEmail } from "../emails/org-invite.js";
 import { StaffWelcomeEmail } from "../emails/staff-welcome.js";
 import { OutreachEmail } from "../emails/outreach.js";
+import { BillingNoticeEmail } from "../emails/billing-notice.js";
+import { WelcomeEmail } from "../emails/welcome.js";
+import type { BillingLifecycleType } from "@prisma/client";
 
 export type EmailMessage = {
   to: string;
@@ -285,3 +288,189 @@ export async function sendStaffWelcomeEmail(input: {
     }),
   );
 }
+
+export async function sendWelcomeEmail(input: {
+  to: string;
+  recipientName: string;
+  organizationName: string;
+}) {
+  const homeUrl = `${portalOrigin()}/onboarding`;
+  const logoUrl = emailLogoUrl();
+  await dispatch(
+    input.to,
+    "Welcome to Tiksly — choose a plan to get started",
+    `Hi ${input.recipientName},\n\nYour workspace ${input.organizationName} is ready.\n\nChoose a plan: ${homeUrl}`,
+    React.createElement(WelcomeEmail, {
+      logoUrl,
+      recipientName: input.recipientName,
+      organizationName: input.organizationName,
+      homeUrl,
+    }),
+  );
+}
+
+export async function sendBillingNoticeEmail(input: {
+  to: string;
+  recipientName?: string;
+  organizationName: string;
+  type:
+    | BillingLifecycleType
+    | "PAYMENT_FAILED"
+    | "PAST_DUE";
+  fromPlanCode?: string | null;
+  toPlanCode?: string | null;
+  periodEnd?: string | null;
+}) {
+  const billingUrl = `${portalOrigin()}/billing`;
+  const logoUrl = emailLogoUrl();
+  const greeting = input.recipientName
+    ? `Hi ${input.recipientName},`
+    : "Hi,";
+  const org = input.organizationName;
+
+  const copy = billingEmailCopy({
+    type: input.type,
+    organizationName: org,
+    fromPlanCode: input.fromPlanCode,
+    toPlanCode: input.toPlanCode,
+    periodEnd: input.periodEnd,
+  });
+
+  await dispatch(
+    input.to,
+    copy.subject,
+    [
+      greeting,
+      ...copy.paragraphs,
+      ...(copy.detailLines ?? []),
+      `Manage billing: ${billingUrl}`,
+    ].join("\n\n"),
+    React.createElement(BillingNoticeEmail, {
+      logoUrl,
+      preview: copy.preview,
+      title: copy.title,
+      greeting,
+      paragraphs: copy.paragraphs,
+      detailLines: copy.detailLines,
+      ctaLabel: copy.ctaLabel,
+      ctaUrl: billingUrl,
+    }),
+  );
+}
+
+function billingEmailCopy(input: {
+  type: BillingLifecycleType | "PAYMENT_FAILED" | "PAST_DUE";
+  organizationName: string;
+  fromPlanCode?: string | null;
+  toPlanCode?: string | null;
+  periodEnd?: string | null;
+}) {
+  const planLabel = (code?: string | null) =>
+    code ? code.charAt(0).toUpperCase() + code.slice(1) : "your plan";
+  const period =
+    input.periodEnd != null
+      ? new Date(input.periodEnd).toLocaleDateString()
+      : null;
+
+  switch (input.type) {
+    case "SUBSCRIBED":
+      return {
+        subject: `You're subscribed on ${input.organizationName}`,
+        preview: "Your Tiksly subscription is active",
+        title: "Subscription started",
+        paragraphs: [
+          `Thanks for subscribing on ${input.organizationName}. Your product access is unlocked.`,
+        ],
+        detailLines: [
+          `Plan: ${planLabel(input.toPlanCode)}`,
+          ...(period ? [`Current period ends: ${period}`] : []),
+        ],
+        ctaLabel: "Open billing",
+      };
+    case "RENEWED":
+      return {
+        subject: `Subscription renewed — ${input.organizationName}`,
+        preview: "Your Tiksly subscription renewed",
+        title: "Subscription renewed",
+        paragraphs: [
+          `Your subscription for ${input.organizationName} renewed successfully.`,
+        ],
+        detailLines: [
+          `Plan: ${planLabel(input.toPlanCode)}`,
+          ...(period ? [`Next period ends: ${period}`] : []),
+        ],
+        ctaLabel: "View billing",
+      };
+    case "UPGRADED":
+      return {
+        subject: `Plan upgraded — ${planLabel(input.fromPlanCode)} → ${planLabel(input.toPlanCode)}`,
+        preview: "Your Tiksly plan was upgraded",
+        title: "Plan upgraded",
+        paragraphs: [
+          `Your plan on ${input.organizationName} was upgraded. New limits apply immediately.`,
+        ],
+        detailLines: [
+          `${planLabel(input.fromPlanCode)} → ${planLabel(input.toPlanCode)}`,
+        ],
+        ctaLabel: "See plan details",
+      };
+    case "DOWNGRADED":
+      return {
+        subject: `Plan changed — ${planLabel(input.fromPlanCode)} → ${planLabel(input.toPlanCode)}`,
+        preview: "Your Tiksly plan was changed",
+        title: "Plan changed",
+        paragraphs: [
+          `Your plan on ${input.organizationName} was changed. Limits now match your new plan.`,
+        ],
+        detailLines: [
+          `${planLabel(input.fromPlanCode)} → ${planLabel(input.toPlanCode)}`,
+        ],
+        ctaLabel: "Review billing",
+      };
+    case "CANCELED":
+      return {
+        subject: `Subscription canceled — ${input.organizationName}`,
+        preview: "Your Tiksly subscription was canceled",
+        title: "Subscription canceled",
+        paragraphs: [
+          `The subscription for ${input.organizationName} was canceled. Product features stay locked until you renew.`,
+        ],
+        detailLines: input.fromPlanCode
+          ? [`Previous plan: ${planLabel(input.fromPlanCode)}`]
+          : undefined,
+        ctaLabel: "Resubscribe",
+      };
+    case "PAYMENT_FAILED":
+      return {
+        subject: `Payment failed — action needed for ${input.organizationName}`,
+        preview: "Update your payment method",
+        title: "Payment failed",
+        paragraphs: [
+          `We couldn't process a payment for ${input.organizationName}. Update your payment method to avoid losing access.`,
+        ],
+        ctaLabel: "Update payment method",
+      };
+    case "PAST_DUE":
+      return {
+        subject: `Subscription past due — ${input.organizationName}`,
+        preview: "Your subscription is past due",
+        title: "Subscription past due",
+        paragraphs: [
+          `Your subscription for ${input.organizationName} is past due. Please update billing to keep product access.`,
+        ],
+        ctaLabel: "Fix billing",
+      };
+    case "REGISTERED":
+    default:
+      return {
+        subject: `Welcome to Tiksly — ${input.organizationName}`,
+        preview: "Your workspace is ready",
+        title: "Welcome",
+        paragraphs: [
+          `Your workspace ${input.organizationName} is ready. Choose a plan to unlock the product.`,
+        ],
+        ctaLabel: "Choose a plan",
+      };
+  }
+}
+

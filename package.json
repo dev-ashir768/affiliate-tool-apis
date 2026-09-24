@@ -29,15 +29,10 @@
     "db:push": "prisma db push",
     "db:migrate:dev": "prisma migrate dev",
     "db:migrate:deploy": "prisma migrate deploy",
-    "db:migrate:prod": "prisma migrate deploy",
     "db:reset": "prisma migrate reset",
     "db:seed": "prisma db seed",
     "db:studio": "prisma studio",
-    "db:status": "prisma migrate status",
-    "prisma:generate": "prisma generate",
-    "prisma:migrate": "prisma migrate deploy",
-    "prisma:migrate:dev": "prisma migrate dev",
-    "prisma:seed": "prisma db seed"
+    "db:status": "prisma migrate status"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

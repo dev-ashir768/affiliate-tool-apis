@@ -5,6 +5,7 @@ import { AppError } from "../../lib/errors.js";
 import { logger } from "../../lib/logger.js";
 import { getStripe } from "./stripe.js";
 import { recordBillingLifecycleEvent } from "../../lib/billing-lifecycle.js";
+import { notifyBillingLifecycle } from "../../lib/billing-emails.js";
 
 type StripeLikeEvent = {
   id: string;
@@ -240,6 +241,8 @@ async function applyPlanAndSubscription(input: {
     input.status === "TRIALING" ||
     input.status === "PAST_DUE";
 
+  const periodEnd = input.currentPeriodEnd?.toISOString() ?? null;
+
   if (input.status === "CANCELED" && prevStatus !== "CANCELED") {
     await recordBillingLifecycleEvent({
       organizationId: input.organizationId,
@@ -247,9 +250,24 @@ async function applyPlanAndSubscription(input: {
       fromPlanCode: prevPlan,
       toPlanCode: nextPlanCode,
       stripeEventId: input.stripeEventId,
+      periodEnd,
       meta: { source: input.source ?? "webhook", prevStatus },
     });
     return;
+  }
+
+  if (
+    input.status === "PAST_DUE" &&
+    prevStatus !== "PAST_DUE" &&
+    prevStatus !== "CANCELED"
+  ) {
+    void notifyBillingLifecycle({
+      organizationId: input.organizationId,
+      type: "PAST_DUE",
+      fromPlanCode: prevPlan,
+      toPlanCode: nextPlanCode,
+      periodEnd,
+    });
   }
 
   if (hasAccess && !hadAccess) {
@@ -259,6 +277,7 @@ async function applyPlanAndSubscription(input: {
       fromPlanCode: prevPlan,
       toPlanCode: nextPlanCode,
       stripeEventId: input.stripeEventId,
+      periodEnd,
       meta: {
         source: input.source ?? "webhook",
         status: input.status,
@@ -278,6 +297,7 @@ async function applyPlanAndSubscription(input: {
       fromPlanCode: prevPlan,
       toPlanCode: nextPlanCode,
       stripeEventId: input.stripeEventId,
+      periodEnd,
       meta: {
         source: input.source ?? "webhook",
         fromCents: before.plan.monthlyPriceCents,
@@ -301,6 +321,7 @@ async function applyPlanAndSubscription(input: {
       fromPlanCode: prevPlan,
       toPlanCode: nextPlanCode,
       stripeEventId: input.stripeEventId,
+      periodEnd,
       meta: {
         source: input.source ?? "webhook",
         previousPeriodEnd: before.subscription?.currentPeriodEnd?.toISOString(),
@@ -476,12 +497,24 @@ async function applyClaimedEvent(event: StripeLikeEvent): Promise<void> {
       });
       return;
 
-    case "invoice.payment_failed":
+    case "invoice.payment_failed": {
       await applyFromInvoice(object, {
         stripeEventId: event.id,
         source: "invoice.payment_failed",
       });
+      const stripeCustomerId = customerIdFrom(object);
+      const org = await resolveOrganization({
+        stripeCustomerId,
+        organizationId: organizationIdFromObject(object),
+      });
+      if (org) {
+        void notifyBillingLifecycle({
+          organizationId: org.id,
+          type: "PAYMENT_FAILED",
+        });
+      }
       return;
+    }
 
     default:
       logger.info("stripe webhook: ignored event type", {

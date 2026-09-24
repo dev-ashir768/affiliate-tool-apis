@@ -18,6 +18,7 @@ async function notifyOrgInvite(input: {
   inviteToken: string;
   organizationName: string;
   role: string;
+  inviterName?: string;
 }) {
   const inviteUrl = `${portalOrigin()}/invite/${input.inviteToken}`;
   await sendOrgInviteEmail({
@@ -25,6 +26,7 @@ async function notifyOrgInvite(input: {
     inviteUrl,
     organizationName: input.organizationName,
     role: input.role,
+    inviterName: input.inviterName,
   });
 }
 
@@ -168,6 +170,11 @@ export async function createInvite(input: {
   const org = await prisma.organization.findUniqueOrThrow({
     where: { id: input.organizationId },
   });
+  const inviter = await prisma.user.findUnique({
+    where: { id: input.actorUserId },
+    select: { name: true },
+  });
+  const inviterName = inviter?.name;
 
   let user = await prisma.user.findUnique({ where: { email } });
   let createdStub = false;
@@ -236,6 +243,7 @@ export async function createInvite(input: {
       inviteToken: raw,
       organizationName: org.name,
       role: input.role,
+      inviterName,
     });
 
     return {
@@ -284,6 +292,7 @@ export async function createInvite(input: {
     inviteToken: raw,
     organizationName: org.name,
     role: input.role,
+    inviterName,
   });
 
   return {

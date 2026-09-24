@@ -1,4 +1,4 @@
-import { NavArea, PlatformRole, PrismaClient } from "@prisma/client";
+import { MembershipRole, NavArea, PlatformRole, PrismaClient } from "@prisma/client";
 
 const prisma = new PrismaClient();
 
@@ -10,6 +10,7 @@ type NavItemSeed = {
   sortOrder: number;
   enabled?: boolean;
   allowedPlatformRoles?: PlatformRole[];
+  allowedOrgRoles?: MembershipRole[];
 };
 
 async function seedNavSection(
@@ -31,7 +32,7 @@ async function seedNavSection(
       sortOrder: item.sortOrder,
       enabled: item.enabled ?? true,
       allowedPlatformRoles: item.allowedPlatformRoles ?? [],
-      allowedOrgRoles: [] as const,
+      allowedOrgRoles: item.allowedOrgRoles ?? [],
     };
 
     await prisma.navItem.upsert({
@@ -230,6 +231,7 @@ async function main() {
       href: "/outreach",
       icon: "Mail",
       sortOrder: 5,
+      allowedOrgRoles: [MembershipRole.OWNER, MembershipRole.ADMIN],
     },
     {
       key: "invites",
@@ -237,6 +239,7 @@ async function main() {
       href: "/invites",
       icon: "Send",
       sortOrder: 6,
+      allowedOrgRoles: [MembershipRole.OWNER, MembershipRole.ADMIN],
     },
     {
       key: "samples",
@@ -251,6 +254,7 @@ async function main() {
       href: "/automations",
       icon: "Bot",
       sortOrder: 8,
+      allowedOrgRoles: [MembershipRole.OWNER, MembershipRole.ADMIN],
     },
     {
       key: "messages",
@@ -272,6 +276,7 @@ async function main() {
       href: "/orders",
       icon: "ShoppingCart",
       sortOrder: 11,
+      allowedOrgRoles: [MembershipRole.OWNER, MembershipRole.ADMIN],
     },
     {
       key: "analytics",
@@ -280,13 +285,21 @@ async function main() {
       icon: "BarChart3",
       sortOrder: 12,
     },
-    { key: "team", label: "Team", href: "/team", icon: "Users", sortOrder: 13 },
+    {
+      key: "team",
+      label: "Team",
+      href: "/team",
+      icon: "Users",
+      sortOrder: 13,
+      allowedOrgRoles: [MembershipRole.OWNER, MembershipRole.ADMIN],
+    },
     {
       key: "billing",
       label: "Billing",
       href: "/billing",
       icon: "CreditCard",
       sortOrder: 14,
+      allowedOrgRoles: [MembershipRole.OWNER, MembershipRole.ADMIN],
     },
     {
       key: "settings",

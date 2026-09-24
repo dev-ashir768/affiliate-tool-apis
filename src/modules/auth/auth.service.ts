@@ -1,4 +1,8 @@
-import type { MembershipRole, PlatformRole, PlatformMembershipStatus } from "@prisma/client";
+import type {
+  MembershipRole,
+  PlatformRole,
+  PlatformMembershipStatus,
+} from "@prisma/client";
 import { randomBytes } from "node:crypto";
 import { prisma } from "../../lib/prisma.js";
 import { AppError } from "../../lib/errors.js";
@@ -14,6 +18,7 @@ import { env } from "../../config/env.js";
 import { logger } from "../../lib/logger.js";
 import { writeAuditLog } from "../../lib/audit.js";
 import { recordBillingLifecycleEvent } from "../../lib/billing-lifecycle.js";
+import { notifyWelcomeEmail } from "../../lib/billing-emails.js";
 import { sendPasswordResetEmail } from "../../lib/email.js";
 import {
   mirrorRefresh,
@@ -27,7 +32,8 @@ import {
 } from "../orgs/orgs.service.js";
 
 function portalOrigin(): string {
-  const origin = env.CORS_ORIGINS.split(",")[0]?.trim() || "http://localhost:3000";
+  const origin =
+    env.CORS_ORIGINS.split(",")[0]?.trim() || "http://localhost:3000";
   return origin.replace(/\/$/, "");
 }
 
@@ -58,7 +64,7 @@ type PlatformMembershipSummary = {
 
 async function resolveAccessClaims(
   userId: string,
-  preferredOrgId?: string | null
+  preferredOrgId?: string | null,
 ): Promise<{
   claims: AccessClaims;
   platformMembership: PlatformMembershipSummary;
@@ -66,6 +72,21 @@ async function resolveAccessClaims(
   const platform = await prisma.platformMembership.findFirst({
     where: { userId, status: "ACTIVE" },
   });
+
+  // Strict area isolation: platform staff sessions never carry org context.
+  // Merchants never get platformRole. One account = one work area.
+  if (platform) {
+    return {
+      claims: {
+        sub: userId,
+        orgId: null,
+        orgRole: null,
+        platformRole: platform.role as PlatformRole,
+        hasProductAccess: false,
+      },
+      platformMembership: { role: platform.role, status: platform.status },
+    };
+  }
 
   let membership =
     preferredOrgId != null
@@ -85,32 +106,24 @@ async function resolveAccessClaims(
     });
   }
 
-  if (!platform && !membership) {
+  if (!membership) {
     throw new AppError("FORBIDDEN", "No active organization", 403);
   }
 
-  let hasProductAccess = false;
-  if (membership) {
-    const org = await prisma.organization.findUnique({
-      where: { id: membership.organizationId },
-      include: { subscription: true },
-    });
-    hasProductAccess = subscriptionGrantsAccess(org?.subscription);
-  }
-
-  const claims: AccessClaims = {
-    sub: userId,
-    orgId: membership?.organizationId ?? null,
-    orgRole: (membership?.role as MembershipRole | undefined) ?? null,
-    platformRole: (platform?.role as PlatformRole | undefined) ?? null,
-    hasProductAccess,
-  };
+  const org = await prisma.organization.findUnique({
+    where: { id: membership.organizationId },
+    include: { subscription: true },
+  });
 
   return {
-    claims,
-    platformMembership: platform
-      ? { role: platform.role, status: platform.status }
-      : null,
+    claims: {
+      sub: userId,
+      orgId: membership.organizationId,
+      orgRole: membership.role as MembershipRole,
+      platformRole: null,
+      hasProductAccess: subscriptionGrantsAccess(org?.subscription),
+    },
+    platformMembership: null,
   };
 }
 
@@ -181,6 +194,12 @@ export async function register(input: {
     meta: { email: result.user.email },
   });
 
+  void notifyWelcomeEmail({
+    to: result.user.email,
+    recipientName: result.user.name,
+    organizationName: result.organization.name,
+  });
+
   const session = await issueSession({
     sub: result.user.id,
     orgId: result.organization.id,
@@ -190,7 +209,11 @@ export async function register(input: {
   });
 
   return {
-    user: { id: result.user.id, email: result.user.email, name: result.user.name },
+    user: {
+      id: result.user.id,
+      email: result.user.email,
+      name: result.user.name,
+    },
     organization: {
       id: result.organization.id,
       name: result.organization.name,
@@ -223,12 +246,17 @@ export async function login(input: { email: string; password: string }) {
   };
 }
 
-export async function rotateRefresh(raw: string, preferredOrgId?: string | null) {
+export async function rotateRefresh(
+  raw: string,
+  preferredOrgId?: string | null,
+) {
   const hash = sha256(raw);
   if (!(await isRefreshMirrored(hash))) {
     throw new AppError("UNAUTHORIZED", "Invalid refresh token", 401);
   }
-  const stored = await prisma.refreshToken.findUnique({ where: { tokenHash: hash } });
+  const stored = await prisma.refreshToken.findUnique({
+    where: { tokenHash: hash },
+  });
   if (!stored || stored.revokedAt || stored.expiresAt < new Date()) {
     throw new AppError("UNAUTHORIZED", "Invalid refresh token", 401);
   }
@@ -246,7 +274,9 @@ export async function rotateRefresh(raw: string, preferredOrgId?: string | null)
 
 export async function revokeRefresh(raw: string) {
   const hash = sha256(raw);
-  const stored = await prisma.refreshToken.findUnique({ where: { tokenHash: hash } });
+  const stored = await prisma.refreshToken.findUnique({
+    where: { tokenHash: hash },
+  });
   if (stored && !stored.revokedAt) {
     await prisma.refreshToken.update({
       where: { id: stored.id },
@@ -261,17 +291,30 @@ export async function getMe(userId: string, orgId: string | null) {
   const platform = await prisma.platformMembership.findFirst({
     where: { userId, status: "ACTIVE" },
   });
+  const platformMembership: PlatformMembershipSummary = platform
+    ? { role: platform.role, status: platform.status }
+    : null;
+
+  // Staff sessions are isolated from merchant org work.
+  if (platformMembership) {
+    return {
+      user: { id: user.id, email: user.email, name: user.name },
+      currentOrganizationId: null,
+      platformMembership,
+      memberships: [],
+      redirectTo: redirectFor(platformMembership.role, false),
+    };
+  }
+
   const memberships = await prisma.membership.findMany({
     where: { userId, status: "ACTIVE" },
     include: { organization: { include: { plan: true, subscription: true } } },
   });
-  const platformMembership: PlatformMembershipSummary = platform
-    ? { role: platform.role, status: platform.status }
-    : null;
+
   return {
     user: { id: user.id, email: user.email, name: user.name },
     currentOrganizationId: orgId,
-    platformMembership,
+    platformMembership: null,
     memberships: memberships.map((m) => ({
       role: m.role,
       organization: {
@@ -289,7 +332,7 @@ export async function getMe(userId: string, orgId: string | null) {
       },
     })),
     redirectTo: redirectFor(
-      platformMembership?.role ?? null,
+      null,
       orgId
         ? memberships.some(
             (m) =>
@@ -348,13 +391,20 @@ export async function requestPasswordReset(input: { email: string }) {
   };
 }
 
-export async function resetPassword(input: { token: string; password: string }) {
+export async function resetPassword(input: {
+  token: string;
+  password: string;
+}) {
   const tokenHash = sha256(input.token);
   const row = await prisma.passwordResetToken.findUnique({
     where: { tokenHash },
   });
   if (!row || row.usedAt || row.expiresAt < new Date()) {
-    throw new AppError("VALIDATION_ERROR", "Invalid or expired reset token", 400);
+    throw new AppError(
+      "VALIDATION_ERROR",
+      "Invalid or expired reset token",
+      400,
+    );
   }
 
   const passwordHash = await hashPassword(input.password);

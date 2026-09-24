@@ -41,6 +41,7 @@ function toPrismaArea(area: NavAreaParam): NavArea {
 }
 
 function itemAllowed(
+  area: NavAreaParam,
   item: {
     enabled: boolean;
     allowedPlatformRoles: PlatformRole[];
@@ -50,22 +51,17 @@ function itemAllowed(
 ): boolean {
   if (!item.enabled) return false;
 
-  if (item.allowedPlatformRoles.length > 0) {
-    if (
-      !claims.platformRole ||
-      !item.allowedPlatformRoles.includes(claims.platformRole)
-    ) {
-      return false;
-    }
+  // Area isolation: only apply role lists that belong to this area.
+  if (area === "backoffice") {
+    if (item.allowedPlatformRoles.length === 0) return true;
+    return (
+      !!claims.platformRole &&
+      item.allowedPlatformRoles.includes(claims.platformRole)
+    );
   }
 
-  if (item.allowedOrgRoles.length > 0) {
-    if (!claims.orgRole || !item.allowedOrgRoles.includes(claims.orgRole)) {
-      return false;
-    }
-  }
-
-  return true;
+  if (item.allowedOrgRoles.length === 0) return true;
+  return !!claims.orgRole && item.allowedOrgRoles.includes(claims.orgRole);
 }
 
 export async function getNavigation(
@@ -81,7 +77,7 @@ export async function getNavigation(
       );
     }
   } else if (area === "dashboard") {
-    if (!claims.orgId) {
+    if (claims.platformRole || !claims.orgId) {
       throw new AppError(
         "FORBIDDEN",
         "Organization membership required for dashboard navigation",
@@ -106,15 +102,15 @@ export async function getNavigation(
     .map((section) => ({
       id: section.key,
       label: section.label,
-      items: section.items.filter((item) => itemAllowed(item, claims)).map(
-        (item) => ({
+      items: section.items
+        .filter((item) => itemAllowed(area, item, claims))
+        .map((item) => ({
           id: item.key,
           label: item.label,
           href: item.href,
           icon: item.icon,
           ...(item.badge ? { badge: item.badge } : {}),
-        })
-      ),
+        })),
     }))
     .filter((section) => section.items.length > 0);
 

@@ -1,6 +1,7 @@
 import type { BillingLifecycleType, Prisma } from "@prisma/client";
 import { prisma } from "./prisma.js";
 import { logger } from "./logger.js";
+import { notifyBillingLifecycle } from "./billing-emails.js";
 
 export async function recordBillingLifecycleEvent(input: {
   organizationId: string;
@@ -10,6 +11,10 @@ export async function recordBillingLifecycleEvent(input: {
   actorUserId?: string | null;
   stripeEventId?: string | null;
   meta?: Record<string, unknown> | null;
+  /** ISO period end for email copy */
+  periodEnd?: string | null;
+  /** Skip transactional email (rare) */
+  silent?: boolean;
 }) {
   try {
     await prisma.billingLifecycleEvent.create({
@@ -28,6 +33,17 @@ export async function recordBillingLifecycleEvent(input: {
       type: input.type,
       organizationId: input.organizationId,
       err: err instanceof Error ? err.message : String(err),
+    });
+    return;
+  }
+
+  if (!input.silent) {
+    void notifyBillingLifecycle({
+      organizationId: input.organizationId,
+      type: input.type,
+      fromPlanCode: input.fromPlanCode,
+      toPlanCode: input.toPlanCode,
+      periodEnd: input.periodEnd,
     });
   }
 }
