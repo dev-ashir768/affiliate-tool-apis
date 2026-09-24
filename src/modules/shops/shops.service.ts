@@ -1,7 +1,9 @@
 import type { ShopRegion } from "@prisma/client";
 import { prisma } from "../../lib/prisma.js";
 import { AppError } from "../../lib/errors.js";
+import { searchShopProducts } from "../../lib/tiktok-shop/client.js";
 import { reserveBot } from "../bots/bots.service.js";
+import { getShopOpenApiCredentials } from "./tiktok-oauth.service.js";
 
 async function countActiveShops(organizationId: string): Promise<number> {
   return prisma.shop.count({
@@ -152,4 +154,42 @@ export async function disconnectShop(organizationId: string, shopId: string) {
   });
 
   return toShopResponse(updated);
+}
+
+/** Live TikTok Shop catalog (read-only). Used by Products page and invite pickers. */
+export async function listShopProducts(
+  organizationId: string,
+  input: {
+    shopId: string;
+    pageSize?: number;
+    pageToken?: string | null;
+    status?: string | null;
+  },
+) {
+  const shop = await prisma.shop.findFirst({
+    where: {
+      id: input.shopId,
+      organizationId,
+      status: { not: "DISCONNECTED" },
+    },
+  });
+  if (!shop) throw new AppError("NOT_FOUND", "Shop not found", 404);
+  if (!shop.oauthConnectedAt) {
+    throw new AppError(
+      "SHOP_NOT_READY",
+      "Shop has not completed TikTok OAuth",
+      400,
+    );
+  }
+
+  const credentials = await getShopOpenApiCredentials(
+    organizationId,
+    input.shopId,
+  );
+  return searchShopProducts({
+    credentials,
+    pageSize: input.pageSize,
+    pageToken: input.pageToken,
+    status: input.status ?? "ACTIVATE",
+  });
 }

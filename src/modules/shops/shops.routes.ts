@@ -12,6 +12,7 @@ import {
   connectShop,
   disconnectShop,
   getShop,
+  listShopProducts,
   listShops,
 } from "./shops.service.js";
 import { requestVerify } from "./verify.service.js";
@@ -151,6 +152,35 @@ shopsRoutes.get("/:id", authenticate, requireOrg, async (req, res, next) => {
   }
 });
 
+shopsRoutes.get(
+  "/:id/products",
+  authenticate,
+  requireOrg,
+  async (req, res, next) => {
+    try {
+      if (!req.auth?.orgId) {
+        throw new AppError("UNAUTHORIZED", "Missing access token", 401);
+      }
+      const pageSize = req.query.pageSize
+        ? Number(req.query.pageSize)
+        : undefined;
+      const pageToken = req.query.pageToken
+        ? String(req.query.pageToken)
+        : null;
+      const status = req.query.status ? String(req.query.status) : null;
+      res.json(
+        await listShopProducts(req.auth.orgId, {
+          shopId: String(req.params.id),
+          pageSize: Number.isFinite(pageSize) ? pageSize : undefined,
+          pageToken,
+          status,
+        }),
+      );
+    } catch (err) {
+      next(err);
+    }
+  },
+);
 shopsRoutes.post(
   "/:id/verify",
   rateLimit({

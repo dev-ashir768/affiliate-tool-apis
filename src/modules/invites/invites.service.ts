@@ -5,9 +5,9 @@ import { writeAuditLog } from "../../lib/audit.js";
 import { logger } from "../../lib/logger.js";
 import {
   createTargetCollaboration,
-  searchShopProducts,
 } from "../../lib/tiktok-shop/client.js";
 import { getShopOpenApiCredentials } from "../shops/tiktok-oauth.service.js";
+import { listShopProducts } from "../shops/shops.service.js";
 import { resolveCreatorIdsFromList } from "../creators/creators.service.js";
 import {
   affiliateInviteQueue,
@@ -171,33 +171,7 @@ export async function listShopProductsForInvite(
   organizationId: string,
   input: { shopId: string; pageSize?: number; pageToken?: string | null },
 ) {
-  const shop = await prisma.shop.findFirst({
-    where: {
-      id: input.shopId,
-      organizationId,
-      status: { not: "DISCONNECTED" },
-    },
-  });
-  if (!shop) throw new AppError("NOT_FOUND", "Shop not found", 404);
-  if (!shop.oauthConnectedAt) {
-    throw new AppError(
-      "SHOP_NOT_READY",
-      "Shop has not completed TikTok OAuth",
-      400,
-    );
-  }
-
-  const credentials = await getShopOpenApiCredentials(
-    organizationId,
-    input.shopId,
-  );
-  const result = await searchShopProducts({
-    credentials,
-    pageSize: input.pageSize,
-    pageToken: input.pageToken,
-    status: "ACTIVATE",
-  });
-  return result;
+  return listShopProducts(organizationId, input);
 }
 
 export async function listAffiliateInvites(organizationId: string) {

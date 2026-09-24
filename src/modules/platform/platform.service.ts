@@ -10,10 +10,8 @@ import { writeAuditLog } from "../../lib/audit.js";
 import { encryptVault } from "../../lib/crypto.js";
 import { sendStaffWelcomeEmail } from "../../lib/email.js";
 import { logger } from "../../lib/logger.js";
-import {
-  enqueueCrawlerDryRun,
-  getCrawlerStatus,
-} from "./crawler.service.js";
+import { enqueueCrawlerDryRun, getCrawlerStatus } from "./crawler.service.js";
+import { subscriptionGrantsAccess } from "../../lib/entitlements.js";
 
 export { getCrawlerStatus as crawlerStatus, enqueueCrawlerDryRun };
 
@@ -23,6 +21,11 @@ export type ListParams = {
   search?: string;
   sortBy?: string;
   sortOrder?: "asc" | "desc";
+  /** Filter orgs by subscription status; use NONE for no subscription row. */
+  subscriptionStatus?: string;
+  planCode?: string;
+  /** free | paid | access (ACTIVE/TRIALING/PAST_DUE) */
+  billingTier?: string;
 };
 
 function toStaff(row: {
@@ -108,7 +111,7 @@ export async function createStaff(input: {
       throw new AppError(
         "CONFLICT",
         "User already has a platform membership",
-        409
+        409,
       );
     }
     const membership = await prisma.platformMembership.create({
@@ -181,7 +184,7 @@ function logStaffEmailFailure(err: unknown) {
 export async function patchStaff(
   membershipId: string,
   input: { role?: PlatformRole; status?: PlatformMembershipStatus },
-  actorUserId: string
+  actorUserId: string,
 ) {
   const membership = await prisma.platformMembership.findUnique({
     where: { id: membershipId },
@@ -191,11 +194,12 @@ export async function patchStaff(
     throw new AppError("NOT_FOUND", "Staff membership not found", 404);
   }
 
-  if (
-    membership.userId === actorUserId &&
-    input.status === "DISABLED"
-  ) {
-    throw new AppError("VALIDATION_ERROR", "Cannot disable your own account", 400);
+  if (membership.userId === actorUserId && input.status === "DISABLED") {
+    throw new AppError(
+      "VALIDATION_ERROR",
+      "Cannot disable your own account",
+      400,
+    );
   }
 
   if (
@@ -206,7 +210,7 @@ export async function patchStaff(
     throw new AppError(
       "VALIDATION_ERROR",
       "Cannot demote your own SUPERADMIN role",
-      400
+      400,
     );
   }
 
@@ -236,10 +240,18 @@ function toOrgSummary(org: {
   shopLimit: number;
   dailyInviteQuota: number;
   createdAt: Date;
+  stripeCustomerId?: string | null;
   plan: { id: string; code: string; name: string };
-  subscription: { status: string; currentPeriodEnd: Date | null } | null;
+  subscription: {
+    status: string;
+    currentPeriodEnd: Date | null;
+    stripeSubscriptionId?: string;
+  } | null;
   _count?: { shops: number; memberships: number };
 }) {
+  const hasProductAccess = subscriptionGrantsAccess(
+    org.subscription as Parameters<typeof subscriptionGrantsAccess>[0],
+  );
   return {
     id: org.id,
     name: org.name,
@@ -251,20 +263,59 @@ function toOrgSummary(org: {
     plan: org.plan,
     subscriptionStatus: org.subscription?.status ?? null,
     currentPeriodEnd: org.subscription?.currentPeriodEnd ?? null,
+    hasProductAccess,
+    stripeCustomerId: org.stripeCustomerId ?? null,
     shopCount: org._count?.shops ?? undefined,
     memberCount: org._count?.memberships ?? undefined,
   };
 }
 
 export async function listOrganizations(params: ListParams) {
-  const where: Prisma.OrganizationWhereInput = params.search
-    ? {
-        OR: [
-          { name: { contains: params.search, mode: "insensitive" } },
-          { slug: { contains: params.search, mode: "insensitive" } },
-        ],
-      }
-    : {};
+  const and: Prisma.OrganizationWhereInput[] = [];
+
+  if (params.search) {
+    and.push({
+      OR: [
+        { name: { contains: params.search, mode: "insensitive" } },
+        { slug: { contains: params.search, mode: "insensitive" } },
+      ],
+    });
+  }
+
+  if (params.planCode) {
+    and.push({ plan: { code: params.planCode } });
+  }
+
+  const status = params.subscriptionStatus?.toUpperCase();
+  if (status === "NONE") {
+    and.push({ subscription: null });
+  } else if (
+    status &&
+    ["TRIALING", "ACTIVE", "PAST_DUE", "CANCELED", "INCOMPLETE"].includes(
+      status,
+    )
+  ) {
+    and.push({
+      subscription: {
+        status: status as
+          "TRIALING" | "ACTIVE" | "PAST_DUE" | "CANCELED" | "INCOMPLETE",
+      },
+    });
+  }
+
+  const tier = params.billingTier?.toLowerCase();
+  if (tier === "free") {
+    and.push({ plan: { code: "free" } });
+  } else if (tier === "paid") {
+    and.push({ plan: { code: { not: "free" } } });
+  } else if (tier === "access") {
+    and.push({
+      subscription: { status: { in: ["ACTIVE", "TRIALING", "PAST_DUE"] } },
+    });
+  }
+
+  const where: Prisma.OrganizationWhereInput =
+    and.length > 0 ? { AND: and } : {};
 
   const sortOrder = params.sortOrder ?? "desc";
   let orderBy: Prisma.OrganizationOrderByWithRelationInput = {
@@ -319,6 +370,7 @@ export async function getOrganization(id: string) {
   return {
     ...toOrgSummary(org),
     stripeCustomerId: org.stripeCustomerId,
+    stripeSubscriptionId: org.subscription?.stripeSubscriptionId ?? null,
     members: org.memberships.map((m) => ({
       id: m.id,
       role: m.role,
@@ -391,23 +443,25 @@ export async function listPlatformShops(params: ListParams) {
 }
 
 export async function billingOverview() {
-  const [orgTotal, byPlan, bySubStatus, paidOrgs] = await Promise.all([
-    prisma.organization.count(),
-    prisma.organization.groupBy({
-      by: ["planId"],
-      _count: { _all: true },
-    }),
-    prisma.subscription.groupBy({
-      by: ["status"],
-      _count: { _all: true },
-    }),
-    prisma.organization.findMany({
-      where: {
-        subscription: { status: { in: ["ACTIVE", "TRIALING", "PAST_DUE"] } },
-      },
-      include: { plan: true, subscription: true },
-    }),
-  ]);
+  const [orgTotal, byPlan, bySubStatus, accessOrgs, noSubCount] =
+    await Promise.all([
+      prisma.organization.count(),
+      prisma.organization.groupBy({
+        by: ["planId"],
+        _count: { _all: true },
+      }),
+      prisma.subscription.groupBy({
+        by: ["status"],
+        _count: { _all: true },
+      }),
+      prisma.organization.findMany({
+        where: {
+          subscription: { status: { in: ["ACTIVE", "TRIALING", "PAST_DUE"] } },
+        },
+        include: { plan: true, subscription: true },
+      }),
+      prisma.organization.count({ where: { subscription: null } }),
+    ]);
 
   const plans = await prisma.plan.findMany();
   const planById = new Map(plans.map((p) => [p.id, p]));
@@ -426,33 +480,59 @@ export async function billingOverview() {
     count: row._count._all,
   }));
 
-  const mrrCents = paidOrgs
-    .filter((o) => o.subscription && o.plan.code !== "free")
-    .reduce((sum, o) => sum + o.plan.monthlyPriceCents, 0);
+  const statusCount = (status: string) =>
+    bySubStatus.find((r) => r.status === status)?._count._all ?? 0;
 
-  const paidOrganizationCount = paidOrgs.filter(
-    (o) => o.plan.code !== "free"
-  ).length;
+  const payingOrgs = accessOrgs.filter((o) => o.plan.code !== "free");
+  const mrrCents = payingOrgs.reduce(
+    (sum, o) => sum + o.plan.monthlyPriceCents,
+    0,
+  );
+  const paidOrganizationCount = payingOrgs.length;
+  const withProductAccessCount = accessOrgs.length;
   const freeOrganizationCount = await prisma.organization.count({
     where: { plan: { code: "free" } },
   });
-  const activeSubscriptionCount =
-    bySubStatus.find((r) => r.status === "ACTIVE")?._count._all ?? 0;
-  const pastDueCount =
-    bySubStatus.find((r) => r.status === "PAST_DUE")?._count._all ?? 0;
-  const trialingCount =
-    bySubStatus.find((r) => r.status === "TRIALING")?._count._all ?? 0;
+
+  const [lifecycleByType, recentLifecycle] = await Promise.all([
+    prisma.billingLifecycleEvent.groupBy({
+      by: ["type"],
+      _count: { _all: true },
+    }),
+    prisma.billingLifecycleEvent.findMany({
+      orderBy: { createdAt: "desc" },
+      take: 40,
+      include: {
+        organization: { select: { id: true, name: true, slug: true } },
+      },
+    }),
+  ]);
+
+  const lifecycleCount = (type: string) =>
+    lifecycleByType.find((r) => r.type === type)?._count._all ?? 0;
+
+  const registeredCustomers = lifecycleCount("REGISTERED") || orgTotal;
+  const subscribedEver = await prisma.billingLifecycleEvent.findMany({
+    where: { type: "SUBSCRIBED" },
+    distinct: ["organizationId"],
+    select: { organizationId: true },
+  });
+  const upgradedEver = await prisma.billingLifecycleEvent.findMany({
+    where: { type: "UPGRADED" },
+    distinct: ["organizationId"],
+    select: { organizationId: true },
+  });
 
   const revenueByPlan = plans
     .filter((p) => p.code !== "free")
     .map((plan) => {
-      const count = byPlan.find((r) => r.planId === plan.id)?._count._all ?? 0;
+      const orgCount = payingOrgs.filter((o) => o.planId === plan.id).length;
       return {
         planCode: plan.code,
         planName: plan.name,
-        orgCount: count,
+        orgCount,
         monthlyPriceCents: plan.monthlyPriceCents,
-        mrrCents: count * plan.monthlyPriceCents,
+        mrrCents: orgCount * plan.monthlyPriceCents,
       };
     });
 
@@ -460,9 +540,13 @@ export async function billingOverview() {
     organizationCount: orgTotal,
     freeOrganizationCount,
     paidOrganizationCount,
-    activeSubscriptionCount,
-    pastDueCount,
-    trialingCount,
+    withProductAccessCount,
+    noSubscriptionCount: noSubCount,
+    activeSubscriptionCount: statusCount("ACTIVE"),
+    pastDueCount: statusCount("PAST_DUE"),
+    trialingCount: statusCount("TRIALING"),
+    canceledCount: statusCount("CANCELED"),
+    incompleteCount: statusCount("INCOMPLETE"),
     avgMrrPerPaidOrgCents:
       paidOrganizationCount > 0
         ? Math.round(mrrCents / paidOrganizationCount)
@@ -471,6 +555,36 @@ export async function billingOverview() {
     revenueByPlan,
     subscriptionsByStatus,
     mrrCents,
+    funnel: {
+      registered: registeredCustomers,
+      subscribed: subscribedEver.length,
+      renewed: lifecycleCount("RENEWED"),
+      upgraded: lifecycleCount("UPGRADED"),
+      upgradedCustomers: upgradedEver.length,
+      downgraded: lifecycleCount("DOWNGRADED"),
+      canceled: lifecycleCount("CANCELED"),
+      conversionRate:
+        registeredCustomers > 0
+          ? Math.round((subscribedEver.length / registeredCustomers) * 1000) /
+            10
+          : 0,
+    },
+    recentLifecycle: recentLifecycle.map((e) => ({
+      id: e.id,
+      type: e.type,
+      fromPlanCode: e.fromPlanCode,
+      toPlanCode: e.toPlanCode,
+      createdAt: e.createdAt.toISOString(),
+      organization: e.organization,
+    })),
+    notes: {
+      mrrBasis:
+        "Catalog MRR from ACTIVE/TRIALING/PAST_DUE orgs on non-free plans (not Stripe invoice totals).",
+      invoicing:
+        "Invoices and payment history live in Stripe. Merchants open Customer Portal from /billing; staff use Stripe Dashboard.",
+      funnel:
+        "Funnel events are recorded on register, first subscribe, renew (period advance), upgrade/downgrade, and cancel.",
+    },
   };
 }
 
@@ -606,7 +720,7 @@ export async function patchProxy(
     password?: string | null;
     region?: string | null;
     status?: "AVAILABLE" | "IN_USE" | "DISABLED" | "BANNED";
-  }
+  },
 ) {
   const existing = await prisma.proxy.findUnique({ where: { id } });
   if (!existing) {

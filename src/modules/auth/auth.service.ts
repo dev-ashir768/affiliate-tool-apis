@@ -13,6 +13,7 @@ import { sha256 } from "../../lib/crypto.js";
 import { env } from "../../config/env.js";
 import { logger } from "../../lib/logger.js";
 import { writeAuditLog } from "../../lib/audit.js";
+import { recordBillingLifecycleEvent } from "../../lib/billing-lifecycle.js";
 import { sendPasswordResetEmail } from "../../lib/email.js";
 import {
   mirrorRefresh,
@@ -170,6 +171,14 @@ export async function register(input: {
       },
     });
     return { user, organization };
+  });
+
+  await recordBillingLifecycleEvent({
+    organizationId: result.organization.id,
+    type: "REGISTERED",
+    toPlanCode: "free",
+    actorUserId: result.user.id,
+    meta: { email: result.user.email },
   });
 
   const session = await issueSession({

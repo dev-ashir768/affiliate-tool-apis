@@ -33,6 +33,15 @@ enum SubscriptionStatus {
   INCOMPLETE
 }
 
+enum BillingLifecycleType {
+  REGISTERED
+  SUBSCRIBED
+  RENEWED
+  UPGRADED
+  DOWNGRADED
+  CANCELED
+}
+
 enum BotStatus {
   AVAILABLE
   RESERVED
@@ -260,6 +269,7 @@ model Organization {
   shopOrders       ShopOrder[]
   commissions      Commission[]
   sampleRequests   SampleRequest[]
+  billingLifecycleEvents BillingLifecycleEvent[]
 }
 
 model Membership {
@@ -365,6 +375,24 @@ model StripeEvent {
   eventId     String   @unique
   type        String
   processedAt DateTime @default(now())
+}
+
+/// SaaS funnel / check-and-balance: register → subscribe → renew → upgrade/downgrade → cancel.
+model BillingLifecycleEvent {
+  id             String               @id @default(cuid())
+  organizationId String
+  organization   Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  type           BillingLifecycleType
+  fromPlanCode   String?
+  toPlanCode     String?
+  actorUserId    String?
+  stripeEventId  String?
+  meta           Json?
+  createdAt      DateTime             @default(now())
+
+  @@index([organizationId, createdAt])
+  @@index([type, createdAt])
+  @@index([createdAt])
 }
 
 model PlatformMembership {

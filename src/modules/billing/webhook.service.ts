@@ -4,6 +4,7 @@ import { prisma } from "../../lib/prisma.js";
 import { AppError } from "../../lib/errors.js";
 import { logger } from "../../lib/logger.js";
 import { getStripe } from "./stripe.js";
+import { recordBillingLifecycleEvent } from "../../lib/billing-lifecycle.js";
 
 type StripeLikeEvent = {
   id: string;
@@ -140,7 +141,17 @@ async function applyPlanAndSubscription(input: {
   currentPeriodEnd?: Date | null;
   stripePriceId?: string;
   planCode?: string;
+  stripeEventId?: string;
+  source?: string;
 }) {
+  const before = await prisma.organization.findUnique({
+    where: { id: input.organizationId },
+    include: { plan: true, subscription: true },
+  });
+  if (!before) {
+    throw new AppError("NOT_FOUND", "Organization not found", 404);
+  }
+
   const data: {
     stripeCustomerId?: string;
     planId?: string;
@@ -154,6 +165,9 @@ async function applyPlanAndSubscription(input: {
     data.stripeCustomerId = input.stripeCustomerId;
   }
 
+  let nextPlanCode = before.plan.code;
+  let nextPlanMonthlyCents = before.plan.monthlyPriceCents;
+
   if (input.status === "CANCELED") {
     const free = await prisma.plan.findUnique({ where: { code: "free" } });
     if (free) {
@@ -162,6 +176,8 @@ async function applyPlanAndSubscription(input: {
       data.shopLimit = free.shopLimit;
       data.botLimit = free.botLimit;
       data.dailyInviteQuota = free.dailyInviteQuota;
+      nextPlanCode = free.code;
+      nextPlanMonthlyCents = free.monthlyPriceCents;
     }
   } else {
     const plan = await resolvePlan({
@@ -174,6 +190,8 @@ async function applyPlanAndSubscription(input: {
       data.shopLimit = plan.shopLimit;
       data.botLimit = plan.botLimit;
       data.dailyInviteQuota = plan.dailyInviteQuota;
+      nextPlanCode = plan.code;
+      nextPlanMonthlyCents = plan.monthlyPriceCents;
     } else if (input.stripePriceId || input.planCode) {
       logger.warn("stripe webhook: plan not resolved for paid status", {
         organizationId: input.organizationId,
@@ -207,6 +225,89 @@ async function applyPlanAndSubscription(input: {
       },
     });
   });
+
+  const prevStatus = before.subscription?.status ?? null;
+  const prevPlan = before.plan.code;
+  const prevPeriodEnd =
+    before.subscription?.currentPeriodEnd?.getTime() ?? null;
+  const nextPeriodEnd = input.currentPeriodEnd?.getTime() ?? null;
+  const hadAccess =
+    prevStatus === "ACTIVE" ||
+    prevStatus === "TRIALING" ||
+    prevStatus === "PAST_DUE";
+  const hasAccess =
+    input.status === "ACTIVE" ||
+    input.status === "TRIALING" ||
+    input.status === "PAST_DUE";
+
+  if (input.status === "CANCELED" && prevStatus !== "CANCELED") {
+    await recordBillingLifecycleEvent({
+      organizationId: input.organizationId,
+      type: "CANCELED",
+      fromPlanCode: prevPlan,
+      toPlanCode: nextPlanCode,
+      stripeEventId: input.stripeEventId,
+      meta: { source: input.source ?? "webhook", prevStatus },
+    });
+    return;
+  }
+
+  if (hasAccess && !hadAccess) {
+    await recordBillingLifecycleEvent({
+      organizationId: input.organizationId,
+      type: "SUBSCRIBED",
+      fromPlanCode: prevPlan,
+      toPlanCode: nextPlanCode,
+      stripeEventId: input.stripeEventId,
+      meta: {
+        source: input.source ?? "webhook",
+        status: input.status,
+      },
+    });
+    return;
+  }
+
+  if (hasAccess && hadAccess && nextPlanCode !== prevPlan) {
+    const type =
+      nextPlanMonthlyCents >= before.plan.monthlyPriceCents
+        ? "UPGRADED"
+        : "DOWNGRADED";
+    await recordBillingLifecycleEvent({
+      organizationId: input.organizationId,
+      type,
+      fromPlanCode: prevPlan,
+      toPlanCode: nextPlanCode,
+      stripeEventId: input.stripeEventId,
+      meta: {
+        source: input.source ?? "webhook",
+        fromCents: before.plan.monthlyPriceCents,
+        toCents: nextPlanMonthlyCents,
+      },
+    });
+    return;
+  }
+
+  if (
+    hasAccess &&
+    hadAccess &&
+    nextPlanCode === prevPlan &&
+    nextPeriodEnd != null &&
+    prevPeriodEnd != null &&
+    nextPeriodEnd > prevPeriodEnd
+  ) {
+    await recordBillingLifecycleEvent({
+      organizationId: input.organizationId,
+      type: "RENEWED",
+      fromPlanCode: prevPlan,
+      toPlanCode: nextPlanCode,
+      stripeEventId: input.stripeEventId,
+      meta: {
+        source: input.source ?? "webhook",
+        previousPeriodEnd: before.subscription?.currentPeriodEnd?.toISOString(),
+        currentPeriodEnd: input.currentPeriodEnd?.toISOString(),
+      },
+    });
+  }
 }
 
 /**
@@ -239,7 +340,7 @@ async function expandSubscriptionObject(
 
 async function applyFromSubscription(
   object: Record<string, unknown>,
-  extras: { planCode?: string } = {},
+  extras: { planCode?: string; stripeEventId?: string; source?: string } = {},
 ) {
   const stripeSubscriptionId = asString(object.id);
   if (!stripeSubscriptionId) {
@@ -267,10 +368,15 @@ async function applyFromSubscription(
     currentPeriodEnd: periodEndFromSubscription(object),
     stripePriceId: priceIdFromSubscription(object),
     planCode: extras.planCode ?? metadataValue(object, "planCode"),
+    stripeEventId: extras.stripeEventId,
+    source: extras.source,
   });
 }
 
-async function applyFromCheckoutSession(object: Record<string, unknown>) {
+async function applyFromCheckoutSession(
+  object: Record<string, unknown>,
+  extras: { stripeEventId?: string } = {},
+) {
   const organizationId = organizationIdFromObject(object);
   const stripeCustomerId = customerIdFrom(object);
   const planCode = metadataValue(object, "planCode");
@@ -302,13 +408,19 @@ async function applyFromCheckoutSession(object: Record<string, unknown>) {
     };
   }
 
-  await applyFromSubscription(expanded, { planCode });
+  await applyFromSubscription(expanded, {
+    planCode,
+    stripeEventId: extras.stripeEventId,
+    source: "checkout",
+  });
 }
 
-async function applyFromInvoice(object: Record<string, unknown>) {
+async function applyFromInvoice(
+  object: Record<string, unknown>,
+  extras: { stripeEventId?: string; source?: string } = {},
+) {
   const expanded = await expandSubscriptionObject(object.subscription);
   if (!expanded) {
-    // Invoice without a subscription (one-off) — ignore.
     return;
   }
 
@@ -320,9 +432,10 @@ async function applyFromInvoice(object: Record<string, unknown>) {
   try {
     await applyFromSubscription(expanded, {
       planCode: metadataValue(object, "planCode"),
+      stripeEventId: extras.stripeEventId,
+      source: extras.source ?? "invoice",
     });
   } catch (err) {
-    // Orphan invoice (no linked org) — ack to avoid infinite Stripe retries.
     if (err instanceof AppError && err.code === "NOT_FOUND") {
       logger.warn("stripe webhook: invoice org not found, skipping", {
         invoiceId: asString(object.id),
@@ -341,7 +454,7 @@ async function applyClaimedEvent(event: StripeLikeEvent): Promise<void> {
   switch (event.type) {
     case "checkout.session.completed":
     case "checkout.session.async_payment_succeeded":
-      await applyFromCheckoutSession(object);
+      await applyFromCheckoutSession(object, { stripeEventId: event.id });
       return;
 
     case "customer.subscription.created":
@@ -349,13 +462,25 @@ async function applyClaimedEvent(event: StripeLikeEvent): Promise<void> {
     case "customer.subscription.deleted":
     case "customer.subscription.paused":
     case "customer.subscription.resumed":
-      await applyFromSubscription(object);
+      await applyFromSubscription(object, {
+        stripeEventId: event.id,
+        source: event.type,
+      });
       return;
 
     case "invoice.paid":
     case "invoice.payment_succeeded":
+      await applyFromInvoice(object, {
+        stripeEventId: event.id,
+        source: "invoice.paid",
+      });
+      return;
+
     case "invoice.payment_failed":
-      await applyFromInvoice(object);
+      await applyFromInvoice(object, {
+        stripeEventId: event.id,
+        source: "invoice.payment_failed",
+      });
       return;
 
     default:

@@ -6,6 +6,7 @@ import {
   subscriptionGrantsAccess,
 } from "../../lib/entitlements.js";
 import { writeAuditLog } from "../../lib/audit.js";
+import { recordBillingLifecycleEvent } from "../../lib/billing-lifecycle.js";
 
 export async function listPlans(opts: { includePrivate?: boolean } = {}) {
   const plans = await prisma.plan.findMany({
@@ -178,12 +179,19 @@ async function upgradeSubscription(input: {
     shopLimit: number;
     botLimit: number;
     dailyInviteQuota: number;
+    monthlyPriceCents?: number;
   };
   actorUserId?: string;
 }) {
   if (!input.plan.stripePriceId) {
     throw new AppError("VALIDATION_ERROR", "Plan missing Stripe price", 400);
   }
+
+  const before = await prisma.organization.findUniqueOrThrow({
+    where: { id: input.organizationId },
+    include: { plan: true },
+  });
+
   const stripe = getStripe();
   const sub = await stripe.subscriptions.retrieve(input.stripeSubscriptionId);
   const itemId = sub.items.data[0]?.id;
@@ -215,13 +223,40 @@ async function upgradeSubscription(input: {
     },
   });
 
+  const toCents =
+    input.plan.monthlyPriceCents ??
+    (
+      await prisma.plan.findUnique({ where: { id: input.plan.id } })
+    )?.monthlyPriceCents ??
+    0;
+  const type =
+    toCents >= before.plan.monthlyPriceCents ? "UPGRADED" : "DOWNGRADED";
+
+  await recordBillingLifecycleEvent({
+    organizationId: input.organizationId,
+    type,
+    fromPlanCode: before.plan.code,
+    toPlanCode: input.plan.code,
+    actorUserId: input.actorUserId,
+    meta: {
+      source: "api.upgrade",
+      fromCents: before.plan.monthlyPriceCents,
+      toCents,
+      stripeStatus: updated.status,
+    },
+  });
+
   if (input.actorUserId) {
     await writeAuditLog({
       actorUserId: input.actorUserId,
       action: "billing.subscription.upgrade",
       entityType: "Organization",
       entityId: input.organizationId,
-      meta: { planCode: input.plan.code, stripeStatus: updated.status },
+      meta: {
+        fromPlanCode: before.plan.code,
+        planCode: input.plan.code,
+        stripeStatus: updated.status,
+      },
     });
   }
 

@@ -23,6 +23,9 @@ export const listQuerySchema = z.object({
   sortBy: z.string().optional(),
   sortOrder: z.enum(["asc", "desc"]).optional(),
   organizationId: z.string().optional(),
+  subscriptionStatus: z.string().optional(),
+  planCode: z.string().optional(),
+  billingTier: z.enum(["free", "paid", "access"]).optional(),
 });
 
 export const createPlatformCreatorSchema = z.object({
