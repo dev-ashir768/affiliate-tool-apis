@@ -1,4 +1,5 @@
-import type { Prisma, SampleRequestStatus } from "../../lib/prisma.js";
+import type { Prisma } from "@prisma/client";
+import type { SampleRequestStatus } from "../../lib/prisma-enums.js";
 import { prisma, sampleRequests } from "../../lib/prisma.js";
 import { AppError } from "../../lib/errors.js";
 import { writeAuditLog } from "../../lib/audit.js";

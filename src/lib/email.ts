@@ -9,7 +9,7 @@ import { StaffWelcomeEmail } from "../emails/staff-welcome.js";
 import { OutreachEmail } from "../emails/outreach.js";
 import { BillingNoticeEmail } from "../emails/billing-notice.js";
 import { WelcomeEmail } from "../emails/welcome.js";
-import type { BillingLifecycleType } from "@prisma/client";
+import type { BillingLifecycleType } from "./prisma-enums.js";
 
 export type EmailMessage = {
   to: string;

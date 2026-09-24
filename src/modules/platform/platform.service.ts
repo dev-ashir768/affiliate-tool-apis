@@ -3,7 +3,7 @@ import type {
   PlatformRole,
   Prisma,
 } from "@prisma/client";
-import { prisma } from "../../lib/prisma.js";
+import { prisma, billingLifecycleEvents } from "../../lib/prisma.js";
 import { AppError } from "../../lib/errors.js";
 import { hashPassword } from "../../lib/password.js";
 import { writeAuditLog } from "../../lib/audit.js";
@@ -495,11 +495,11 @@ export async function billingOverview() {
   });
 
   const [lifecycleByType, recentLifecycle] = await Promise.all([
-    prisma.billingLifecycleEvent.groupBy({
+    billingLifecycleEvents.groupBy({
       by: ["type"],
       _count: { _all: true },
     }),
-    prisma.billingLifecycleEvent.findMany({
+    billingLifecycleEvents.findMany({
       orderBy: { createdAt: "desc" },
       take: 40,
       include: {
@@ -509,15 +509,17 @@ export async function billingOverview() {
   ]);
 
   const lifecycleCount = (type: string) =>
-    lifecycleByType.find((r) => r.type === type)?._count._all ?? 0;
+    (
+      lifecycleByType as Array<{ type: string; _count: { _all: number } }>
+    ).find((r) => r.type === type)?._count._all ?? 0;
 
   const registeredCustomers = lifecycleCount("REGISTERED") || orgTotal;
-  const subscribedEver = await prisma.billingLifecycleEvent.findMany({
+  const subscribedEver = await billingLifecycleEvents.findMany({
     where: { type: "SUBSCRIBED" },
     distinct: ["organizationId"],
     select: { organizationId: true },
   });
-  const upgradedEver = await prisma.billingLifecycleEvent.findMany({
+  const upgradedEver = await billingLifecycleEvents.findMany({
     where: { type: "UPGRADED" },
     distinct: ["organizationId"],
     select: { organizationId: true },
@@ -569,7 +571,16 @@ export async function billingOverview() {
             10
           : 0,
     },
-    recentLifecycle: recentLifecycle.map((e) => ({
+    recentLifecycle: (
+      recentLifecycle as Array<{
+        id: string;
+        type: string;
+        fromPlanCode: string | null;
+        toPlanCode: string | null;
+        createdAt: Date;
+        organization: { id: string; name: string; slug: string };
+      }>
+    ).map((e) => ({
       id: e.id,
       type: e.type,
       fromPlanCode: e.fromPlanCode,

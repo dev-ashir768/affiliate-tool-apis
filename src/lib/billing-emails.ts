@@ -1,5 +1,5 @@
-import type { BillingLifecycleType } from "@prisma/client";
 import { prisma } from "./prisma.js";
+import type { BillingLifecycleType } from "./prisma-enums.js";
 import { logger } from "./logger.js";
 import { sendBillingNoticeEmail, sendWelcomeEmail } from "./email.js";
 

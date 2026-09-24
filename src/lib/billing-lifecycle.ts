@@ -1,5 +1,6 @@
-import type { BillingLifecycleType, Prisma } from "@prisma/client";
-import { prisma } from "./prisma.js";
+import type { Prisma } from "@prisma/client";
+import { billingLifecycleEvents } from "./prisma.js";
+import type { BillingLifecycleType } from "./prisma-enums.js";
 import { logger } from "./logger.js";
 import { notifyBillingLifecycle } from "./billing-emails.js";
 
@@ -17,7 +18,7 @@ export async function recordBillingLifecycleEvent(input: {
   silent?: boolean;
 }) {
   try {
-    await prisma.billingLifecycleEvent.create({
+    await billingLifecycleEvents.create({
       data: {
         organizationId: input.organizationId,
         type: input.type,
