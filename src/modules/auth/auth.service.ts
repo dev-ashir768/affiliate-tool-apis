@@ -237,6 +237,19 @@ export async function login(input: { email: string; password: string }) {
 
   const { claims, platformMembership } = await resolveAccessClaims(user.id);
   const session = await issueSession(claims);
+
+  void writeAuditLog({
+    actorUserId: user.id,
+    organizationId: claims.orgId,
+    action: "auth.login",
+    entityType: "User",
+    entityId: user.id,
+    meta: {
+      platformRole: claims.platformRole,
+      hasProductAccess: claims.hasProductAccess,
+    },
+  });
+
   return {
     user: { id: user.id, email: user.email, name: user.name },
     organizationId: claims.orgId,

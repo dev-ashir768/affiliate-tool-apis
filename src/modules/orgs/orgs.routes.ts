@@ -15,6 +15,7 @@ import {
   createInvite,
   getCurrent,
   listMembers,
+  listOrgAuditLogs,
   patchCurrent,
 } from "./orgs.service.js";
 
@@ -71,6 +72,41 @@ orgsRoutes.get(
       next(err);
     }
   }
+);
+
+orgsRoutes.get(
+  "/current/audit",
+  authenticate,
+  requireOrg,
+  requireRole("OWNER", "ADMIN"),
+  async (req, res, next) => {
+    try {
+      if (!req.auth?.orgId) {
+        throw new AppError("UNAUTHORIZED", "Missing access token", 401);
+      }
+      const page = Math.max(1, Number(req.query.page) || 1);
+      const pageSize = Math.min(
+        100,
+        Math.max(1, Number(req.query.pageSize) || 25),
+      );
+      const from =
+        typeof req.query.from === "string" ? req.query.from : undefined;
+      const to = typeof req.query.to === "string" ? req.query.to : undefined;
+      const search =
+        typeof req.query.search === "string" ? req.query.search : undefined;
+      res.json(
+        await listOrgAuditLogs(req.auth.orgId, {
+          page,
+          pageSize,
+          from,
+          to,
+          search,
+        }),
+      );
+    } catch (err) {
+      next(err);
+    }
+  },
 );
 
 orgsRoutes.post(

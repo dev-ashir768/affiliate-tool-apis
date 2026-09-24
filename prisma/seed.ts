@@ -308,6 +308,14 @@ async function main() {
       icon: "Settings",
       sortOrder: 15,
     },
+    {
+      key: "activity",
+      label: "Activity",
+      href: "/activity",
+      icon: "ScrollText",
+      sortOrder: 16,
+      allowedOrgRoles: [MembershipRole.OWNER, MembershipRole.ADMIN],
+    },
   ]);
 
   await seedNavSection(NavArea.BACKOFFICE, "main", [

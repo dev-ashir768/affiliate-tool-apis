@@ -80,7 +80,13 @@ analyticsRoutes.get(
       if (!req.auth?.orgId) {
         throw new AppError("UNAUTHORIZED", "Missing org", 401);
       }
-      res.json(await analyticsOverview(req.auth.orgId));
+      res.json(
+        await analyticsOverview(req.auth.orgId, {
+          from:
+            typeof req.query.from === "string" ? req.query.from : undefined,
+          to: typeof req.query.to === "string" ? req.query.to : undefined,
+        }),
+      );
     } catch (err) {
       next(err);
     }

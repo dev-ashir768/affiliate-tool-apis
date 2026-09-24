@@ -6,6 +6,7 @@ import { sha256 } from "../../lib/crypto.js";
 import { hashPassword } from "../../lib/password.js";
 import { env } from "../../config/env.js";
 import { sendOrgInviteEmail } from "../../lib/email.js";
+import { writeAuditLog } from "../../lib/audit.js";
 
 function portalOrigin(): string {
   const origin =
@@ -246,6 +247,15 @@ export async function createInvite(input: {
       inviterName,
     });
 
+    void writeAuditLog({
+      actorUserId: input.actorUserId,
+      organizationId: input.organizationId,
+      action: "org.invite.create",
+      entityType: "Membership",
+      entityId: membership.id,
+      meta: { email, role: input.role, reinvite: true },
+    });
+
     return {
       inviteToken: raw,
       membership: {
@@ -293,6 +303,15 @@ export async function createInvite(input: {
     organizationName: org.name,
     role: input.role,
     inviterName,
+  });
+
+  void writeAuditLog({
+    actorUserId: input.actorUserId,
+    organizationId: input.organizationId,
+    action: "org.invite.create",
+    entityType: "Membership",
+    entityId: membership.id,
+    meta: { email, role: input.role, reinvite: false },
   });
 
   return {
@@ -379,6 +398,87 @@ export async function acceptInvite(input: {
       id: updated.user.id,
       email: updated.user.email,
       name: updated.user.name,
+    },
+  };
+}
+
+export async function listOrgAuditLogs(
+  organizationId: string,
+  params: {
+    page: number;
+    pageSize: number;
+    from?: string;
+    to?: string;
+    search?: string;
+  },
+) {
+  const createdAt: { gte?: Date; lte?: Date } = {};
+  if (params.from) {
+    const d = new Date(params.from);
+    if (!Number.isNaN(d.getTime())) createdAt.gte = d;
+  }
+  if (params.to) {
+    const d = new Date(params.to);
+    if (!Number.isNaN(d.getTime())) {
+      // Inclusive end-of-day when date-only
+      if (params.to.length <= 10) d.setHours(23, 59, 59, 999);
+      createdAt.lte = d;
+    }
+  }
+
+  const where = {
+    organizationId,
+    ...(Object.keys(createdAt).length > 0 ? { createdAt } : {}),
+    ...(params.search
+      ? {
+          OR: [
+            { action: { contains: params.search, mode: "insensitive" as const } },
+            {
+              entityType: {
+                contains: params.search,
+                mode: "insensitive" as const,
+              },
+            },
+            {
+              actor: {
+                email: { contains: params.search, mode: "insensitive" as const },
+              },
+            },
+          ],
+        }
+      : {}),
+  };
+
+  const [total, rows] = await Promise.all([
+    prisma.auditLog.count({ where }),
+    prisma.auditLog.findMany({
+      where,
+      orderBy: { createdAt: "desc" },
+      skip: (params.page - 1) * params.pageSize,
+      take: params.pageSize,
+      include: {
+        actor: { select: { id: true, email: true, name: true } },
+      },
+    }),
+  ]);
+
+  return {
+    items: rows.map((r) => ({
+      id: r.id,
+      action: r.action,
+      entityType: r.entityType,
+      entityId: r.entityId,
+      meta: r.meta,
+      createdAt: r.createdAt.toISOString(),
+      actor: r.actor
+        ? { id: r.actor.id, email: r.actor.email, name: r.actor.name }
+        : null,
+    })),
+    meta: {
+      page: params.page,
+      pageSize: params.pageSize,
+      total,
+      totalPages: Math.max(1, Math.ceil(total / params.pageSize)),
     },
   };
 }

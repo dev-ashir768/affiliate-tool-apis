@@ -3,6 +3,8 @@ import { AppError } from "../../lib/errors.js";
 import { getStripe, portalBaseUrl } from "./stripe.js";
 import {
   getOrganizationBillingState,
+  getOrganizationUsage,
+  planChangeBlockers,
   subscriptionGrantsAccess,
 } from "../../lib/entitlements.js";
 import { writeAuditLog } from "../../lib/audit.js";
@@ -58,7 +60,43 @@ export async function listPlansForPlatform() {
 
 export async function getBillingOverview(organizationId: string) {
   const state = await getOrganizationBillingState(organizationId);
-  const plans = await listPlans();
+  const [plans, usage] = await Promise.all([
+    listPlans(),
+    getOrganizationUsage(organizationId),
+  ]);
+
+  const currentCents = state.plan.monthlyPriceCents;
+  const hasPaidAccess = subscriptionGrantsAccess(state.subscription);
+
+  const planOptions = plans
+    .filter((p) => p.code !== "free")
+    .map((p) => {
+      const blockers = planChangeBlockers(usage, p);
+      let changeKind: "current" | "upgrade" | "downgrade" | "subscribe" =
+        "subscribe";
+      if (p.code === state.plan.code && hasPaidAccess) {
+        changeKind = "current";
+      } else if (hasPaidAccess) {
+        changeKind =
+          p.monthlyPriceCents >= currentCents ? "upgrade" : "downgrade";
+      }
+      return {
+        ...p,
+        changeKind,
+        canSwitch:
+          changeKind !== "current" &&
+          p.hasStripePrice &&
+          (changeKind !== "downgrade" || blockers.length === 0),
+        blockers,
+      };
+    });
+
+  const overage = {
+    seats: Math.max(0, usage.seats - state.organization.seatLimit),
+    shops: Math.max(0, usage.shops - state.organization.shopLimit),
+    bots: Math.max(0, usage.bots - state.organization.botLimit),
+  };
+
   return {
     hasProductAccess: state.hasProductAccess,
     subscription: state.subscription
@@ -79,7 +117,24 @@ export async function getBillingOverview(organizationId: string) {
       dailyInviteQuota: state.organization.dailyInviteQuota,
       stripeCustomerId: state.organization.stripeCustomerId,
     },
-    plans,
+    usage,
+    overage,
+    hasOverage: overage.seats > 0 || overage.shops > 0 || overage.bots > 0,
+    plans: planOptions,
+    rules: {
+      upgrade:
+        "Upgrade anytime. Stripe prorates the difference and higher limits apply immediately.",
+      downgrade:
+        "Downgrade only when seats, shops, and bots fit the target plan. Remove extras first, then switch. Limits apply immediately after the change; new adds are blocked at the new caps.",
+      cancel:
+        "Cancel via Stripe Customer Portal. Access continues until period end, then the org returns to free limits.",
+      effects: [
+        "Team seats (OWNER/ADMIN/MEMBER + pending invites)",
+        "Connected TikTok shops",
+        "Reserved verify bots",
+        "Daily invite quota",
+      ],
+    },
   };
 }
 
@@ -113,13 +168,12 @@ export async function createCheckoutSession(input: {
   const state = await getOrganizationBillingState(input.organizationId);
   const org = state.organization;
 
-  // Mid-subscription upgrade/downgrade via Stripe API (proration).
   if (
     state.subscription &&
     subscriptionGrantsAccess(state.subscription) &&
     state.subscription.stripeSubscriptionId
   ) {
-    return upgradeSubscription({
+    return changeSubscriptionPlan({
       organizationId: org.id,
       stripeSubscriptionId: state.subscription.stripeSubscriptionId,
       plan,
@@ -154,6 +208,7 @@ export async function createCheckoutSession(input: {
   if (input.actorUserId) {
     await writeAuditLog({
       actorUserId: input.actorUserId,
+      organizationId: org.id,
       action: "billing.checkout.start",
       entityType: "Organization",
       entityId: org.id,
@@ -168,7 +223,7 @@ export async function createCheckoutSession(input: {
   };
 }
 
-async function upgradeSubscription(input: {
+async function changeSubscriptionPlan(input: {
   organizationId: string;
   stripeSubscriptionId: string;
   plan: {
@@ -192,6 +247,29 @@ async function upgradeSubscription(input: {
     include: { plan: true },
   });
 
+  const toCents =
+    input.plan.monthlyPriceCents ??
+    (
+      await prisma.plan.findUnique({ where: { id: input.plan.id } })
+    )?.monthlyPriceCents ??
+    0;
+  const isDowngrade = toCents < before.plan.monthlyPriceCents;
+
+  if (isDowngrade) {
+    const usage = await getOrganizationUsage(input.organizationId);
+    const blockers = planChangeBlockers(usage, input.plan);
+    if (blockers.length > 0) {
+      const detail = blockers
+        .map((b) => `${b.resource}: using ${b.used}, plan allows ${b.limit}`)
+        .join("; ");
+      throw new AppError(
+        "PLAN_LIMIT",
+        `Cannot downgrade until usage fits the target plan (${detail}). Remove seats, shops, or bots first.`,
+        403,
+      );
+    }
+  }
+
   const stripe = getStripe();
   const sub = await stripe.subscriptions.retrieve(input.stripeSubscriptionId);
   const itemId = sub.items.data[0]?.id;
@@ -211,7 +289,6 @@ async function upgradeSubscription(input: {
     },
   );
 
-  // Optimistic local apply — webhook will reconcile.
   await prisma.organization.update({
     where: { id: input.organizationId },
     data: {
@@ -223,14 +300,7 @@ async function upgradeSubscription(input: {
     },
   });
 
-  const toCents =
-    input.plan.monthlyPriceCents ??
-    (
-      await prisma.plan.findUnique({ where: { id: input.plan.id } })
-    )?.monthlyPriceCents ??
-    0;
-  const type =
-    toCents >= before.plan.monthlyPriceCents ? "UPGRADED" : "DOWNGRADED";
+  const type = isDowngrade ? "DOWNGRADED" : "UPGRADED";
 
   await recordBillingLifecycleEvent({
     organizationId: input.organizationId,
@@ -239,7 +309,7 @@ async function upgradeSubscription(input: {
     toPlanCode: input.plan.code,
     actorUserId: input.actorUserId,
     meta: {
-      source: "api.upgrade",
+      source: "api.plan_change",
       fromCents: before.plan.monthlyPriceCents,
       toCents,
       stripeStatus: updated.status,
@@ -249,7 +319,10 @@ async function upgradeSubscription(input: {
   if (input.actorUserId) {
     await writeAuditLog({
       actorUserId: input.actorUserId,
-      action: "billing.subscription.upgrade",
+      organizationId: input.organizationId,
+      action: isDowngrade
+        ? "billing.subscription.downgrade"
+        : "billing.subscription.upgrade",
       entityType: "Organization",
       entityId: input.organizationId,
       meta: {
@@ -262,9 +335,9 @@ async function upgradeSubscription(input: {
 
   const base = portalBaseUrl();
   return {
-    url: `${base}/billing/success?upgraded=1`,
+    url: `${base}/billing/success?${isDowngrade ? "downgraded" : "upgraded"}=1`,
     id: updated.id,
-    mode: "upgrade" as const,
+    mode: (isDowngrade ? "downgrade" : "upgrade") as "upgrade" | "downgrade",
   };
 }
 
@@ -323,7 +396,8 @@ export async function patchPlan(
     where: { id: planId },
     data: {
       name: input.name,
-      description: input.description === undefined ? undefined : input.description,
+      description:
+        input.description === undefined ? undefined : input.description,
       monthlyPriceCents: input.monthlyPriceCents,
       seatLimit: input.seatLimit,
       shopLimit: input.shopLimit,

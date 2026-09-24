@@ -65,6 +65,68 @@ export async function countOrgReservedBots(organizationId: string) {
   });
 }
 
+export async function getOrganizationUsage(organizationId: string) {
+  const [seats, shops, bots] = await Promise.all([
+    prisma.membership.count({
+      where: {
+        organizationId,
+        OR: [
+          { status: "ACTIVE" },
+          {
+            status: "INVITED",
+            inviteTokenHash: { not: null },
+            inviteExpiresAt: { gt: new Date() },
+          },
+        ],
+      },
+    }),
+    prisma.shop.count({
+      where: {
+        organizationId,
+        status: { not: "DISCONNECTED" },
+      },
+    }),
+    countOrgReservedBots(organizationId),
+  ]);
+  return { seats, shops, bots };
+}
+
+export type PlanLimitBlocker = {
+  resource: "seats" | "shops" | "bots";
+  used: number;
+  limit: number;
+};
+
+/** Returns blockers when current usage exceeds a target plan's limits. */
+export function planChangeBlockers(
+  usage: { seats: number; shops: number; bots: number },
+  plan: { seatLimit: number; shopLimit: number; botLimit: number },
+): PlanLimitBlocker[] {
+  const blockers: PlanLimitBlocker[] = [];
+  if (usage.seats > plan.seatLimit) {
+    blockers.push({
+      resource: "seats",
+      used: usage.seats,
+      limit: plan.seatLimit,
+    });
+  }
+  if (usage.shops > plan.shopLimit) {
+    blockers.push({
+      resource: "shops",
+      used: usage.shops,
+      limit: plan.shopLimit,
+    });
+  }
+  if (usage.bots > plan.botLimit) {
+    blockers.push({
+      resource: "bots",
+      used: usage.bots,
+      limit: plan.botLimit,
+    });
+  }
+  return blockers;
+}
+
 export async function assertBotCapacity(organizationId: string) {
   const org = await prisma.organization.findUniqueOrThrow({
     where: { id: organizationId },

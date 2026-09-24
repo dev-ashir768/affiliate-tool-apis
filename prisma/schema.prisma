@@ -270,6 +270,7 @@ model Organization {
   commissions      Commission[]
   sampleRequests   SampleRequest[]
   billingLifecycleEvents BillingLifecycleEvent[]
+  auditLogs        AuditLog[]
 }
 
 model Membership {
@@ -418,17 +419,21 @@ model PasswordResetToken {
 }
 
 model AuditLog {
-  id         String   @id @default(cuid())
-  actorUserId String?
-  actor      User?    @relation("AuditActor", fields: [actorUserId], references: [id], onDelete: SetNull)
-  action     String
-  entityType String
-  entityId   String?
-  meta       Json?
-  createdAt  DateTime @default(now())
+  id             String        @id @default(cuid())
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  actorUserId    String?
+  actor          User?         @relation("AuditActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+  action         String
+  entityType     String
+  entityId       String?
+  meta           Json?
+  createdAt      DateTime      @default(now())
 
   @@index([createdAt])
   @@index([action])
+  @@index([organizationId, createdAt])
+  @@index([actorUserId, createdAt])
 }
 
 model NavSection {

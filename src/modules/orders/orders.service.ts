@@ -140,33 +140,77 @@ function bumpCurrency(
   map.set(key, prev);
 }
 
-export async function analyticsOverview(organizationId: string) {
+export async function analyticsOverview(
+  organizationId: string,
+  range?: { from?: string; to?: string },
+) {
+  const orderedAt: { gte?: Date; lte?: Date } = {};
+  const createdAt: { gte?: Date; lte?: Date } = {};
+  if (range?.from) {
+    const d = new Date(range.from);
+    if (!Number.isNaN(d.getTime())) {
+      orderedAt.gte = d;
+      createdAt.gte = d;
+    }
+  }
+  if (range?.to) {
+    const d = new Date(range.to);
+    if (!Number.isNaN(d.getTime())) {
+      if (range.to.length <= 10) d.setHours(23, 59, 59, 999);
+      orderedAt.lte = d;
+      createdAt.lte = d;
+    }
+  }
+  const hasRange = Object.keys(orderedAt).length > 0;
+
   const funnelPromise = Promise.all([
     prisma.creator.count({ where: { organizationId } }),
     prisma.outreachMessage.count({
-      where: { organizationId, status: "SENT" },
+      where: {
+        organizationId,
+        status: "SENT",
+        ...(hasRange ? { createdAt } : {}),
+      },
     }),
     prisma.outreachMessage.count({
-      where: { organizationId, status: "FAILED" },
+      where: {
+        organizationId,
+        status: "FAILED",
+        ...(hasRange ? { createdAt } : {}),
+      },
     }),
     prisma.shopOrder.aggregate({
-      where: { organizationId, status: { in: ["PAID", "PENDING"] } },
+      where: {
+        organizationId,
+        status: { in: ["PAID", "PENDING"] },
+        ...(hasRange ? { orderedAt } : {}),
+      },
       _sum: { gmvCents: true },
       _count: true,
     }),
     prisma.commission.aggregate({
-      where: { organizationId },
+      where: {
+        organizationId,
+        ...(hasRange ? { createdAt } : {}),
+      },
       _sum: { amountCents: true },
       _count: true,
     }),
     prisma.shopOrder.groupBy({
       by: ["currency"],
-      where: { organizationId, status: { in: ["PAID", "PENDING"] } },
+      where: {
+        organizationId,
+        status: { in: ["PAID", "PENDING"] },
+        ...(hasRange ? { orderedAt } : {}),
+      },
       _sum: { gmvCents: true },
       _count: true,
     }),
     prisma.shopOrder.findMany({
-      where: { organizationId },
+      where: {
+        organizationId,
+        ...(hasRange ? { orderedAt } : {}),
+      },
       orderBy: { orderedAt: "desc" },
       take: 5,
       select: {
@@ -184,6 +228,23 @@ export async function analyticsOverview(organizationId: string) {
     }),
     prisma.creator.count({
       where: { organizationId, stage: "ACTIVE" },
+    }),
+    // Daily GMV series for charts (last N days or selected range)
+    prisma.shopOrder.findMany({
+      where: {
+        organizationId,
+        status: { in: ["PAID", "PENDING"] },
+        ...(hasRange
+          ? { orderedAt }
+          : {
+              orderedAt: {
+                gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
+              },
+            }),
+      },
+      select: { orderedAt: true, gmvCents: true },
+      orderBy: { orderedAt: "asc" },
+      take: 5000,
     }),
   ]);
 
@@ -223,9 +284,21 @@ export async function analyticsOverview(organizationId: string) {
       recentOrders,
       invited,
       active,
+      orderSeriesRows,
     ],
     marketplaceCreators,
   ] = await Promise.all([funnelPromise, marketplacePromise]);
+
+  const gmvByDayMap = new Map<string, number>();
+  for (const row of orderSeriesRows) {
+    if (!row.orderedAt) continue;
+    const key = row.orderedAt.toISOString().slice(0, 10);
+    gmvByDayMap.set(key, (gmvByDayMap.get(key) ?? 0) + row.gmvCents);
+  }
+  const gmvByDay = [...gmvByDayMap.entries()].map(([date, gmvCents]) => ({
+    date,
+    gmvCents,
+  }));
 
   const shopGmvCents = orderAgg._sum.gmvCents ?? 0;
   const shopCurrencyMap = new Map<string, CurrencyBucket>();
@@ -378,6 +451,13 @@ export async function analyticsOverview(organizationId: string) {
   }));
 
   return {
+    range: {
+      from: range?.from ?? null,
+      to: range?.to ?? null,
+    },
+    charts: {
+      gmvByDay,
+    },
     funnel: {
       creators: creatorCount,
       contactedOrInvited: invited,

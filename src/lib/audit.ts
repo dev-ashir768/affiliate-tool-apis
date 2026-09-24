@@ -4,6 +4,7 @@ import { logger } from "./logger.js";
 
 export async function writeAuditLog(input: {
   actorUserId?: string | null;
+  organizationId?: string | null;
   action: string;
   entityType: string;
   entityId?: string | null;
@@ -13,6 +14,7 @@ export async function writeAuditLog(input: {
     await prisma.auditLog.create({
       data: {
         actorUserId: input.actorUserId ?? null,
+        organizationId: input.organizationId ?? null,
         action: input.action,
         entityType: input.entityType,
         entityId: input.entityId ?? null,
