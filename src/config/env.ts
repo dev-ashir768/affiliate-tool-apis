@@ -12,6 +12,11 @@ const schema = z.object({
   ACCESS_TOKEN_TTL_SEC: z.coerce.number().default(900),
   REFRESH_TOKEN_TTL_SEC: z.coerce.number().default(604800),
   CORS_ORIGINS: z.string().default("http://localhost:3000"),
+  /** Public portal URL for Stripe checkout return URLs and email links (no trailing slash). */
+  PORTAL_BASE_URL: z.preprocess(
+    (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+    z.string().url().optional(),
+  ),
   TRUST_PROXY: z
     .enum(["true", "false", "1", "0"])
     .default("false")

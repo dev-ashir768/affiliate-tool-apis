@@ -2,6 +2,7 @@ import nodemailer from "nodemailer";
 import { render } from "@react-email/render";
 import * as React from "react";
 import { env } from "../config/env.js";
+import { portalBaseUrl } from "./portal-base-url.js";
 import { logger } from "./logger.js";
 import { PasswordResetEmail } from "../emails/password-reset.js";
 import { OrgInviteEmail } from "../emails/org-invite.js";
@@ -32,9 +33,7 @@ export type EmailDeliveryStatus = {
 };
 
 function portalOrigin(): string {
-  const origin =
-    env.CORS_ORIGINS.split(",")[0]?.trim() || "http://localhost:3000";
-  return origin.replace(/\/$/, "");
+  return portalBaseUrl();
 }
 
 export function emailLogoUrl(): string {

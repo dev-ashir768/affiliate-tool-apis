@@ -15,6 +15,7 @@ import {
 import { subscriptionGrantsAccess } from "../../lib/entitlements.js";
 import { sha256 } from "../../lib/crypto.js";
 import { env } from "../../config/env.js";
+import { portalBaseUrl } from "../../lib/portal-base-url.js";
 import { logger } from "../../lib/logger.js";
 import { writeAuditLog } from "../../lib/audit.js";
 import { recordBillingLifecycleEvent } from "../../lib/billing-lifecycle.js";
@@ -32,9 +33,7 @@ import {
 } from "../orgs/orgs.service.js";
 
 function portalOrigin(): string {
-  const origin =
-    env.CORS_ORIGINS.split(",")[0]?.trim() || "http://localhost:3000";
-  return origin.replace(/\/$/, "");
+  return portalBaseUrl();
 }
 
 function slugify(name: string) {

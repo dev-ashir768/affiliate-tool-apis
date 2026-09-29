@@ -5,13 +5,12 @@ import { AppError } from "../../lib/errors.js";
 import { sha256 } from "../../lib/crypto.js";
 import { hashPassword } from "../../lib/password.js";
 import { env } from "../../config/env.js";
+import { portalBaseUrl } from "../../lib/portal-base-url.js";
 import { sendOrgInviteEmail } from "../../lib/email.js";
 import { writeAuditLog } from "../../lib/audit.js";
 
 function portalOrigin(): string {
-  const origin =
-    env.CORS_ORIGINS.split(",")[0]?.trim() || "http://localhost:3000";
-  return origin.replace(/\/$/, "");
+  return portalBaseUrl();
 }
 
 async function notifyOrgInvite(input: {
