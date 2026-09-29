@@ -1,6 +1,7 @@
 import { NavArea, type MembershipRole, type PlatformRole } from "@prisma/client";
 import { AppError } from "../../lib/errors.js";
 import { prisma } from "../../lib/prisma.js";
+import { merchantHrefAllowedWithoutProductAccess } from "../../lib/subscription-access-paths.js";
 import type { AccessClaims } from "../../lib/tokens.js";
 
 export type NavAreaParam = "dashboard" | "backoffice";
@@ -104,6 +105,12 @@ export async function getNavigation(
       label: section.label,
       items: section.items
         .filter((item) => itemAllowed(area, item, claims))
+        .filter(
+          (item) =>
+            area !== "dashboard" ||
+            claims.hasProductAccess ||
+            merchantHrefAllowedWithoutProductAccess(item.href),
+        )
         .map((item) => ({
           id: item.key,
           label: item.label,
@@ -114,9 +121,13 @@ export async function getNavigation(
     }))
     .filter((section) => section.items.length > 0);
 
+  const brand = BRAND_BY_AREA[area];
   return {
     area,
-    brand: BRAND_BY_AREA[area],
+    brand:
+      area === "dashboard" && !claims.hasProductAccess
+        ? { ...brand, href: "/onboarding" }
+        : brand,
     sections: filtered,
   };
 }

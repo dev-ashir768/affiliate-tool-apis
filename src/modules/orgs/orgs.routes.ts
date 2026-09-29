@@ -4,6 +4,7 @@ import { validateBody } from "../../middleware/validate.js";
 import { authenticate } from "../../middleware/authenticate.js";
 import { requireOrg } from "../../middleware/require-org.js";
 import { requireRole } from "../../middleware/require-role.js";
+import { requirePaidAccess } from "../../middleware/require-paid-access.js";
 import { verifyAccessToken } from "../../lib/tokens.js";
 import {
   acceptInviteSchema,
@@ -42,6 +43,7 @@ orgsRoutes.patch(
   "/current",
   authenticate,
   requireOrg,
+  requirePaidAccess,
   requireRole("OWNER", "ADMIN"),
   validateBody(patchCurrentOrgSchema),
   async (req, res, next) => {
@@ -61,6 +63,7 @@ orgsRoutes.get(
   "/current/members",
   authenticate,
   requireOrg,
+  requirePaidAccess,
   async (req, res, next) => {
     try {
       if (!req.auth?.orgId) {
@@ -78,6 +81,7 @@ orgsRoutes.get(
   "/current/audit",
   authenticate,
   requireOrg,
+  requirePaidAccess,
   requireRole("OWNER", "ADMIN"),
   async (req, res, next) => {
     try {
@@ -113,6 +117,7 @@ orgsRoutes.post(
   "/current/invites",
   authenticate,
   requireOrg,
+  requirePaidAccess,
   requireRole("OWNER", "ADMIN"),
   validateBody(createInviteSchema),
   async (req, res, next) => {
