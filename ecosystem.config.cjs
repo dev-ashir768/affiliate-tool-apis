@@ -12,7 +12,7 @@
 module.exports = {
   apps: [
     {
-      name: "tiksly-api",
+      name: "influxa-api",
       cwd: __dirname,
       script: "dist/server.js",
       instances: 1,
