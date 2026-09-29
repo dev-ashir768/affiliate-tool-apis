@@ -24,7 +24,7 @@ Extended `prisma/seed.ts` with idempotent upserts for dashboard/backoffice navig
 Seed complete: 2 nav sections, 11 nav items, 0 platform memberships
 ```
 
-Superadmin skipped on this host: Windows Application Control blocked `argon2` native module. Nav seed succeeded. Env vars added to local `.env` (not committed): `superadmin@platform.local`.
+Superadmin skipped on this host: Windows Application Control blocked `argon2` native module. Nav seed succeeded. Env vars added to local `.env` (not committed): `info.ashirarif@gmail.com`.
 
 ## Verification
 
