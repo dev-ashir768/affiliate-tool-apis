@@ -15,7 +15,14 @@ export function validateBody(schema: ZodTypeAny): RequestHandler {
 export function validateQuery(schema: ZodTypeAny): RequestHandler {
   return (req, _res, next) => {
     try {
-      req.query = schema.parse(req.query ?? {}) as typeof req.query;
+      // Express 5: req.query is a getter-only property — reassign throws.
+      const parsed = schema.parse(req.query ?? {}) as typeof req.query;
+      Object.defineProperty(req, "query", {
+        value: parsed,
+        writable: true,
+        enumerable: true,
+        configurable: true,
+      });
       next();
     } catch (err) {
       next(err);
