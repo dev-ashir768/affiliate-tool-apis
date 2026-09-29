@@ -28,7 +28,7 @@ module.exports = {
       merge_logs: true,
     },
     {
-      name: "tiksly-worker",
+      name: "influxa-worker",
       cwd: __dirname,
       script: "dist/worker.js",
       instances: 1,
