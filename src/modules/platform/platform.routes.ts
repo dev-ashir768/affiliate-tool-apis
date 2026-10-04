@@ -7,9 +7,11 @@ import { requirePlatform } from "../../middleware/require-platform.js";
 import {
   createPlatformCreatorSchema,
   createStaffSchema,
+  grantAccessSchema,
   listQuerySchema,
   patchPlatformCreatorSchema,
   patchStaffSchema,
+  revokeAccessSchema,
 } from "./platform.schemas.js";
 import {
   billingOverview,
@@ -21,6 +23,10 @@ import {
   patchStaff,
   listAuditLogs,
 } from "./platform.service.js";
+import {
+  grantOrganizationAccess,
+  revokeOrganizationAccess,
+} from "./platform-grant.service.js";
 import {
   createPlatformCreator,
   listPlatformCreators,
@@ -115,6 +121,50 @@ platformRoutes.get(
     try {
       const org = await getOrganization(String(req.params.id));
       res.json(org);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+platformRoutes.post(
+  "/organizations/:id/grant-access",
+  requirePlatform("SUPERADMIN"),
+  validateBody(grantAccessSchema),
+  async (req, res, next) => {
+    try {
+      if (!req.auth?.sub) {
+        throw new AppError("UNAUTHORIZED", "Missing access token", 401);
+      }
+      res.json(
+        await grantOrganizationAccess(
+          String(req.params.id),
+          req.body,
+          req.auth.sub,
+        ),
+      );
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+platformRoutes.post(
+  "/organizations/:id/revoke-access",
+  requirePlatform("SUPERADMIN"),
+  validateBody(revokeAccessSchema),
+  async (req, res, next) => {
+    try {
+      if (!req.auth?.sub) {
+        throw new AppError("UNAUTHORIZED", "Missing access token", 401);
+      }
+      res.json(
+        await revokeOrganizationAccess(
+          String(req.params.id),
+          req.body,
+          req.auth.sub,
+        ),
+      );
     } catch (err) {
       next(err);
     }

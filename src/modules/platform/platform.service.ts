@@ -9,7 +9,10 @@ import { hashPassword } from "../../lib/password.js";
 import { writeAuditLog } from "../../lib/audit.js";
 import { sendStaffWelcomeEmail } from "../../lib/email.js";
 import { logger } from "../../lib/logger.js";
-import { subscriptionGrantsAccess } from "../../lib/entitlements.js";
+import {
+  isManualSubscriptionId,
+  subscriptionGrantsAccess,
+} from "../../lib/entitlements.js";
 
 export type ListParams = {
   page: number;
@@ -228,6 +231,15 @@ export async function patchStaff(
   return toStaff(updated);
 }
 
+function billingSourceOf(
+  subscription: { stripeSubscriptionId?: string } | null,
+): "manual" | "stripe" | "none" {
+  if (!subscription?.stripeSubscriptionId) return "none";
+  return isManualSubscriptionId(subscription.stripeSubscriptionId)
+    ? "manual"
+    : "stripe";
+}
+
 function toOrgSummary(org: {
   id: string;
   name: string;
@@ -260,6 +272,7 @@ function toOrgSummary(org: {
     subscriptionStatus: org.subscription?.status ?? null,
     currentPeriodEnd: org.subscription?.currentPeriodEnd ?? null,
     hasProductAccess,
+    billingSource: billingSourceOf(org.subscription),
     stripeCustomerId: org.stripeCustomerId ?? null,
     shopCount: org._count?.shops ?? undefined,
     memberCount: org._count?.memberships ?? undefined,

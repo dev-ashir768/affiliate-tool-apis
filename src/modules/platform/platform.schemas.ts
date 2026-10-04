@@ -28,6 +28,16 @@ export const listQuerySchema = z.object({
   billingTier: z.enum(["free", "paid", "access"]).optional(),
 });
 
+export const grantAccessSchema = z.object({
+  planCode: z.string().trim().min(1).max(40),
+  currentPeriodEnd: z.string().datetime().optional().nullable(),
+  note: z.string().trim().max(500).optional(),
+});
+
+export const revokeAccessSchema = z.object({
+  note: z.string().trim().max(500).optional(),
+});
+
 export const createPlatformCreatorSchema = z.object({
   organizationId: z.string().min(1),
   handle: z.string().trim().min(1).max(100),
