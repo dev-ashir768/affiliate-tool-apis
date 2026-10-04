@@ -23,7 +23,8 @@ export async function grantOrganizationAccess(
 
   if (
     org.subscription &&
-    !isManualSubscriptionId(org.subscription.stripeSubscriptionId)
+    !isManualSubscriptionId(org.subscription.stripeSubscriptionId) &&
+    org.subscription.status !== "CANCELED"
   ) {
     throw new AppError(
       "CONFLICT",

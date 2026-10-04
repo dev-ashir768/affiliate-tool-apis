@@ -492,7 +492,12 @@ export async function billingOverview() {
   const statusCount = (status: string) =>
     bySubStatus.find((r) => r.status === status)?._count._all ?? 0;
 
-  const payingOrgs = accessOrgs.filter((o) => o.plan.code !== "free");
+  const payingOrgs = accessOrgs.filter(
+    (o) =>
+      o.plan.code !== "free" &&
+      o.subscription &&
+      !isManualSubscriptionId(o.subscription.stripeSubscriptionId),
+  );
   const mrrCents = payingOrgs.reduce(
     (sum, o) => sum + o.plan.monthlyPriceCents,
     0,

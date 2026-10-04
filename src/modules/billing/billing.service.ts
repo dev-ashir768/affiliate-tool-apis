@@ -4,6 +4,7 @@ import { getStripe, portalBaseUrl } from "./stripe.js";
 import {
   getOrganizationBillingState,
   getOrganizationUsage,
+  isManualSubscriptionId,
   planChangeBlockers,
   subscriptionGrantsAccess,
 } from "../../lib/entitlements.js";
@@ -171,7 +172,8 @@ export async function createCheckoutSession(input: {
   if (
     state.subscription &&
     subscriptionGrantsAccess(state.subscription) &&
-    state.subscription.stripeSubscriptionId
+    state.subscription.stripeSubscriptionId &&
+    !isManualSubscriptionId(state.subscription.stripeSubscriptionId)
   ) {
     return changeSubscriptionPlan({
       organizationId: org.id,

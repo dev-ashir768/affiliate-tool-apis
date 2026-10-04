@@ -20,6 +20,7 @@ describe("platform grant/revoke access", () => {
 
   let orgAId = ""; // free org, will be granted/revoked
   let orgBId = ""; // org with a real Stripe subscription
+  let orgCId = ""; // org with CANCELED Stripe subscription
 
   const orgIds: string[] = [];
   const userIds: string[] = [];
@@ -118,6 +119,29 @@ describe("platform grant/revoke access", () => {
         currentPeriodEnd: new Date(Date.now() + 30 * 86400_000),
       },
     });
+
+    const orgC = await prisma.organization.create({
+      data: {
+        name: "Grant Org C (Canceled Stripe)",
+        slug: `grant-org-c-${suffix}`,
+        planId: freePlanId,
+        seatLimit: free.seatLimit,
+        shopLimit: free.shopLimit,
+        botLimit: free.botLimit,
+        dailyInviteQuota: free.dailyInviteQuota,
+      },
+    });
+    orgCId = orgC.id;
+    orgIds.push(orgC.id);
+
+    await prisma.subscription.create({
+      data: {
+        organizationId: orgC.id,
+        stripeSubscriptionId: `sub_canceled_${suffix}`,
+        status: "CANCELED",
+        currentPeriodEnd: new Date(Date.now() - 86400_000),
+      },
+    });
   }, 60000);
 
   afterAll(async () => {
@@ -194,6 +218,26 @@ describe("platform grant/revoke access", () => {
       .send({ planCode: starterCode });
 
     expect(res.status).toBe(409);
+  }, 60000);
+
+  it("allows grant when existing Stripe subscription is CANCELED", async () => {
+    const res = await request(app)
+      .post(`/api/v1/platform/organizations/${orgCId}/grant-access`)
+      .set("Authorization", `Bearer ${superadminToken}`)
+      .send({ planCode: starterCode });
+
+    expect(res.status).toBe(200);
+    expect(res.body.billingSource).toBe("manual");
+    expect(res.body.stripeSubscriptionId).toBe(`manual_${orgCId}`);
+  }, 60000);
+
+  it("rejects grant with planCode free (400)", async () => {
+    const res = await request(app)
+      .post(`/api/v1/platform/organizations/${orgAId}/grant-access`)
+      .set("Authorization", `Bearer ${superadminToken}`)
+      .send({ planCode: "free" });
+
+    expect(res.status).toBe(400);
   }, 60000);
 
   it("revokes manual access, resetting org to free plan", async () => {
