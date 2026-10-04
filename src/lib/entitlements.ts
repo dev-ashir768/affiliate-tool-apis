@@ -1,28 +1,28 @@
 import type { Subscription, SubscriptionStatus } from "@prisma/client";
+import { env } from "../config/env.js";
 import { prisma } from "../lib/prisma.js";
 import { AppError } from "../lib/errors.js";
 
-const ACCESS_STATUSES: SubscriptionStatus[] = [
-  "ACTIVE",
-  "TRIALING",
-  "PAST_DUE",
-];
+const FULL_ACCESS_STATUSES: SubscriptionStatus[] = ["ACTIVE", "TRIALING"];
 
 export function subscriptionGrantsAccess(
   subscription: Pick<Subscription, "status" | "currentPeriodEnd"> | null | undefined,
 ): boolean {
   if (!subscription) return false;
-  if (!ACCESS_STATUSES.includes(subscription.status)) return false;
-  // If Stripe ended the period and status wasn't refreshed yet, deny.
-  if (
-    subscription.currentPeriodEnd &&
-    subscription.currentPeriodEnd.getTime() < Date.now() &&
-    subscription.status !== "ACTIVE" &&
-    subscription.status !== "TRIALING"
-  ) {
-    return false;
+
+  if (FULL_ACCESS_STATUSES.includes(subscription.status)) {
+    return true;
   }
-  return true;
+
+  // PAST_DUE: limited grace after currentPeriodEnd (default 3 days).
+  if (subscription.status === "PAST_DUE") {
+    const end = subscription.currentPeriodEnd?.getTime();
+    if (end == null) return false;
+    const graceMs = env.PAST_DUE_GRACE_DAYS * 24 * 60 * 60 * 1000;
+    return Date.now() <= end + graceMs;
+  }
+
+  return false;
 }
 
 export async function getOrganizationBillingState(organizationId: string) {

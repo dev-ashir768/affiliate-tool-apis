@@ -166,8 +166,10 @@ export async function completeTikTokShopOAuth(input: {
         : null,
       tiktokGrantedScopes: token.grantedScopes,
       oauthConnectedAt: new Date(),
+      // TikTok Partner OAuth is the trust signal for this path (real seller grant).
+      // Distinct from bot/playwright invite-verify, which must not stub-activate in prod.
       status: "ACTIVE",
-      statusReason: null,
+      statusReason: "tiktok_oauth",
       verifiedAt: new Date(),
     },
     include: { botIdentity: true },

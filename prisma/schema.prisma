@@ -125,6 +125,7 @@ enum CampaignStatus {
 enum OutreachStatus {
   DRAFT
   QUEUED
+  SENDING
   SENT
   FAILED
 }
@@ -468,6 +469,8 @@ model NavItem {
   @@unique([sectionId, key])
 }
 
+/// Legacy table — proxy pool UI/API removed (never consumed by workers).
+/// Kept to avoid a destructive migration; safe to drop in a later cleanup.
 model Proxy {
   id           String        @id @default(cuid())
   label        String

@@ -3,7 +3,7 @@ import { AppError } from "../lib/errors.js";
 import { assertProductAccess } from "../lib/entitlements.js";
 
 /**
- * Merchant product routes require ACTIVE / TRIALING / PAST_DUE subscription.
+ * Merchant product routes require ACTIVE / TRIALING, or PAST_DUE within grace.
  * Platform staff acting without org context are not covered here (requireOrg first).
  */
 export async function requirePaidAccess(

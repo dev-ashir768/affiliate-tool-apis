@@ -2,13 +2,41 @@ import "dotenv/config";
 import { z } from "zod";
 
 const schema = z.object({
+  /** Deploy must set this explicitly — never rely on the development default in prod. */
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   PORT: z.coerce.number().default(4000),
   DATABASE_URL: z.string().min(1),
   REDIS_URL: z.string().min(1),
   JWT_ACCESS_SECRET: z.string().min(32),
   JWT_REFRESH_SECRET: z.string().min(32),
+  /**
+   * AES-256 vault key. Preferred: 64 hex chars (32 bytes).
+   * Legacy: any string ≥32 chars (first 32 UTF-8 bytes / sha256 fallback in crypto.ts).
+   */
   SESSION_VAULT_KEY: z.string().min(32),
+  /** When set, HMAC for TikTok OAuth state (else JWT_ACCESS_SECRET). Prefer dedicated secret. */
+  TIKTOK_OAUTH_STATE_SECRET: z.preprocess(
+    (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+    z.string().min(32).optional(),
+  ),
+  /**
+   * Shared secret for portal BFF → API. When set, auth JSON includes refreshToken
+   * only if request sends matching X-Portal-Bff-Secret.
+   */
+  PORTAL_BFF_SECRET: z.preprocess(
+    (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+    z.string().min(16).optional(),
+  ),
+  /** Override cookie Secure flag. Default: true when NODE_ENV=production. */
+  COOKIE_SECURE: z
+    .enum(["true", "false", "1", "0"])
+    .optional()
+    .transform((v) => {
+      if (v === undefined) return undefined;
+      return v === "true" || v === "1";
+    }),
+  /** Days after currentPeriodEnd that PAST_DUE still grants product access. */
+  PAST_DUE_GRACE_DAYS: z.coerce.number().int().min(0).max(30).default(3),
   ACCESS_TOKEN_TTL_SEC: z.coerce.number().default(900),
   REFRESH_TOKEN_TTL_SEC: z.coerce.number().default(604800),
   CORS_ORIGINS: z.string().default("http://localhost:3000"),
@@ -58,8 +86,8 @@ const schema = z.object({
   PLATFORM_SUPERADMIN_PASSWORD: z.string().min(8).optional(),
   /** Precomputed argon2id hash; use when native argon2 cannot run (e.g. blocked on Windows). */
   PLATFORM_SUPERADMIN_PASSWORD_HASH: z.string().min(1).optional(),
-  /** console = log only; smtp = nodemailer */
-  EMAIL_PROVIDER: z.enum(["console", "smtp", "resend"]).default("console"),
+  /** console = log only (dev); smtp = nodemailer (production) */
+  EMAIL_PROVIDER: z.enum(["console", "smtp"]).default("console"),
   EMAIL_FROM: z.string().optional(),
   EMAIL_LOGO_URL: z.string().url().optional(),
   SMTP_HOST: z.string().optional(),
@@ -70,7 +98,6 @@ const schema = z.object({
     .transform((v) => v === "true" || v === "1"),
   SMTP_USER: z.string().optional(),
   SMTP_PASS: z.string().optional(),
-  RESEND_API_KEY: z.string().optional(),
 
   /** TikTok Shop OpenAPI — app credentials (Partner Center). Tokens live per Shop via OAuth. */
   TIKTOK_SHOP_APP_KEY: z.preprocess(

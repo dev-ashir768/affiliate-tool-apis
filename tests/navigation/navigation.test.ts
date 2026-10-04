@@ -55,22 +55,6 @@ async function ensureBackofficeNavSeeded() {
       sortOrder: 3,
       allowedPlatformRoles: [PlatformRole.SUPERADMIN, PlatformRole.FINANCE],
     },
-    {
-      key: "proxies",
-      label: "Proxies",
-      href: "/backoffice/proxies",
-      icon: "Globe",
-      sortOrder: 4,
-      allowedPlatformRoles: [PlatformRole.SUPERADMIN, PlatformRole.OPS],
-    },
-    {
-      key: "crawler",
-      label: "Crawler",
-      href: "/backoffice/crawler",
-      icon: "Bot",
-      sortOrder: 5,
-      allowedPlatformRoles: [PlatformRole.SUPERADMIN, PlatformRole.OPS],
-    },
   ];
 
   for (const item of items) {
@@ -89,6 +73,14 @@ async function ensureBackofficeNavSeeded() {
       update: data,
     });
   }
+
+  await prisma.navItem.updateMany({
+    where: {
+      sectionId: section.id,
+      key: { in: ["proxies", "crawler"] },
+    },
+    data: { enabled: false },
+  });
 }
 
 function itemKeys(nav: { sections: Array<{ items: Array<{ id: string }> }> }) {
@@ -156,10 +148,10 @@ describe("getNavigation", () => {
         "organizations",
         "shops",
         "finance",
-        "proxies",
-        "crawler",
-      ])
+      ]),
     );
-    expect(keys).toHaveLength(6);
+    // Retired scaffold nav must stay hidden when disabled in DB.
+    expect(keys).not.toContain("proxies");
+    expect(keys).not.toContain("crawler");
   });
 });

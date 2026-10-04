@@ -1,6 +1,6 @@
 /** Brand tokens aligned with portal `globals.css` (oklch → hex for email clients). */
 export const emailBrand = {
-  name: "influxa",
+  name: "Tiksly",
   productName: "Tiksly",
   primary: "#E0232A",
   primaryDark: "#B81B21",

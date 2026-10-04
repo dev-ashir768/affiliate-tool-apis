@@ -42,6 +42,7 @@ describe("shops connect", () => {
         planId,
         seatLimit: 1,
         shopLimit: 0,
+        botLimit: 0,
         dailyInviteQuota: 0,
       },
     });
@@ -53,6 +54,15 @@ describe("shops connect", () => {
         organizationId: org.id,
         role: "OWNER",
         status: "ACTIVE",
+      },
+    });
+
+    await prisma.subscription.create({
+      data: {
+        organizationId: org.id,
+        stripeSubscriptionId: `sub_test_shop_${suffix}`,
+        status: "ACTIVE",
+        currentPeriodEnd: new Date(Date.now() + 86400_000),
       },
     });
   }, 60000);
@@ -79,6 +89,7 @@ describe("shops connect", () => {
         }
       }
       if (orgId) {
+        await prisma.subscription.deleteMany({ where: { organizationId: orgId } });
         await prisma.membership.deleteMany({ where: { organizationId: orgId } });
         await prisma.organization.delete({ where: { id: orgId } });
       }
@@ -101,7 +112,7 @@ describe("shops connect", () => {
   it("connects shop and reserves bot", async () => {
     await prisma.organization.update({
       where: { id: orgId },
-      data: { shopLimit: 1 },
+      data: { shopLimit: 1, botLimit: 2 },
     });
 
     const shop = await connectShop({ organizationId: orgId, region: "US" });
@@ -183,21 +194,31 @@ describe("shops connect", () => {
   }, 60000);
 
   it("HTTP: connect requires OWNER/ADMIN; members can list/get", async () => {
+    // Clear active shops left by prior cases so shopLimit is not the failure mode.
+    const lingering = await prisma.shop.findMany({
+      where: { organizationId: orgId, status: { not: "DISCONNECTED" } },
+    });
+    for (const s of lingering) {
+      await disconnectShop(orgId, s.id);
+    }
+
     await prisma.organization.update({
       where: { id: orgId },
-      data: { shopLimit: 2 },
+      data: { shopLimit: 2, botLimit: 4 },
     });
 
     const accessToken = await signAccessToken({
       sub: ownerId,
       orgId,
-      role: "OWNER",
+      orgRole: "OWNER",
+      platformRole: null,
+      hasProductAccess: true,
     });
 
     const connectRes = await request(app)
       .post("/api/v1/shops/connect")
       .set("Authorization", `Bearer ${accessToken}`)
-      .send({ region: "UK" });
+      .send({ region: "US" });
 
     expect(connectRes.status).toBe(201);
     expect(connectRes.body.status).toBe("PENDING_INVITE");

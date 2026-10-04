@@ -91,6 +91,15 @@ describe("orgs invites", () => {
         status: "ACTIVE",
       },
     });
+
+    await prisma.subscription.create({
+      data: {
+        organizationId: roomyOrg.id,
+        stripeSubscriptionId: `sub_test_roomy_${suffix}`,
+        status: "ACTIVE",
+        currentPeriodEnd: new Date(Date.now() + 86400_000),
+      },
+    });
   }, 60000);
 
   afterAll(async () => {
@@ -131,6 +140,9 @@ describe("orgs invites", () => {
         ].filter(Boolean)),
       ];
       if (orgIds.length) {
+        await prisma.subscription.deleteMany({
+          where: { organizationId: { in: orgIds } },
+        });
         await prisma.membership.deleteMany({
           where: { organizationId: { in: orgIds } },
         });
@@ -342,7 +354,9 @@ describe("orgs invites", () => {
     const accessToken = await signAccessToken({
       sub: roomyOwnerId,
       orgId: roomyOrgId,
-      role: "OWNER",
+      orgRole: "OWNER",
+      platformRole: null,
+      hasProductAccess: true,
     });
 
     const email = `http_invite_${suffix}@test.com`;

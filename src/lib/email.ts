@@ -24,7 +24,7 @@ export interface EmailProvider {
 }
 
 export type EmailDeliveryStatus = {
-  provider: "console" | "smtp" | "resend";
+  provider: "console" | "smtp";
   fromSet: boolean;
   live: boolean;
   ready: boolean;
@@ -81,45 +81,6 @@ class SmtpEmailProvider implements EmailProvider {
   }
 }
 
-class ResendEmailProvider implements EmailProvider {
-  async send(message: EmailMessage): Promise<void> {
-    if (!env.RESEND_API_KEY || !env.EMAIL_FROM) {
-      throw new Error(
-        "RESEND_API_KEY and EMAIL_FROM are required for resend provider",
-      );
-    }
-    const res = await fetch("https://api.resend.com/emails", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${env.RESEND_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        from: env.EMAIL_FROM,
-        to: [message.to],
-        subject: message.subject,
-        text: message.text,
-        html: message.html ?? message.text,
-      }),
-    });
-    const json = (await res.json().catch(() => ({}))) as {
-      message?: string;
-      name?: string;
-      id?: string;
-    };
-    if (!res.ok) {
-      throw new Error(
-        json.message ?? json.name ?? `Resend error (HTTP ${res.status})`,
-      );
-    }
-    logger.info("email.send (resend)", {
-      to: message.to,
-      subject: message.subject,
-      id: json.id,
-    });
-  }
-}
-
 let cached: EmailProvider | null = null;
 
 export function getEmailDeliveryStatus(): EmailDeliveryStatus {
@@ -142,32 +103,16 @@ export function getEmailDeliveryStatus(): EmailDeliveryStatus {
     };
   }
 
-  if (provider === "resend") {
-    if (!env.RESEND_API_KEY) missing.push("RESEND_API_KEY");
-    const ready = missing.length === 0;
-    return {
-      provider,
-      fromSet: Boolean(env.EMAIL_FROM),
-      live: true,
-      ready,
-      missing,
-      note: ready
-        ? "Resend ready for live outreach."
-        : `Resend incomplete: set ${missing.join(", ")}.`,
-    };
-  }
-
   return {
     provider: "console",
     fromSet: Boolean(env.EMAIL_FROM),
     live: false,
     ready: env.NODE_ENV !== "production",
-    missing:
-      env.NODE_ENV === "production" ? ["EMAIL_PROVIDER=smtp|resend"] : [],
+    missing: env.NODE_ENV === "production" ? ["EMAIL_PROVIDER=smtp"] : [],
     note:
       env.NODE_ENV === "production"
-        ? "Console email is not allowed for outreach in production. Set EMAIL_PROVIDER=smtp or resend."
-        : "Console provider logs emails only (dev). Set EMAIL_PROVIDER=smtp or resend for live delivery.",
+        ? "Console email is not allowed for outreach in production. Set EMAIL_PROVIDER=smtp."
+        : "Console provider logs emails only (dev). Set EMAIL_PROVIDER=smtp for live delivery.",
   };
 }
 
@@ -176,8 +121,6 @@ export function getEmailProvider(): EmailProvider {
 
   if (env.EMAIL_PROVIDER === "smtp") {
     cached = new SmtpEmailProvider();
-  } else if (env.EMAIL_PROVIDER === "resend") {
-    cached = new ResendEmailProvider();
   } else {
     cached = new ConsoleEmailProvider();
   }
@@ -198,11 +141,21 @@ async function dispatch(
   await getEmailProvider().send({ to, subject, text, html });
 }
 
+function assertLiveEmailForProduction(kind: string) {
+  if (env.NODE_ENV !== "production") return;
+  if (env.EMAIL_PROVIDER === "console") {
+    throw new Error(
+      `${kind}: EMAIL_PROVIDER=console is not allowed in production`,
+    );
+  }
+}
+
 export async function sendOutreachEmail(input: {
   to: string;
   subject: string;
   bodyText: string;
 }) {
+  assertLiveEmailForProduction("outreach");
   const logoUrl = emailLogoUrl();
   await dispatch(
     input.to,
@@ -225,7 +178,7 @@ export async function sendPasswordResetEmail(input: {
   const logoUrl = emailLogoUrl();
   await dispatch(
     input.to,
-    "Reset your influxa password",
+    "Reset your Tiksly password",
     `Reset your password: ${input.resetUrl}\n\nThis link expires in ${input.expiresMinutes} minutes.`,
     React.createElement(PasswordResetEmail, {
       logoUrl,

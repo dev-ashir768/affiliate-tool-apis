@@ -9,7 +9,7 @@ cp .env.example .env   # fill secrets
 npm install
 npm run db:migrate:prod
 npm run db:seed
-npm run dev:all        # API + workers (shop-verify + crawler)
+npm run dev:all        # API + workers (shop-verify, discovery, outreach, …)
 
 # Portal
 cd affiliate-tool-portal
@@ -50,13 +50,11 @@ Never commit vault keys, IMAP passwords, or Stripe secrets.
 - `EMAIL_PROVIDER=console` (dev logs) or `smtp` with SMTP_* 
 - Templates: password reset, org invite, staff welcome
 
-## Growth product (Phase 9)
+## Growth product
 
-- Creators CRM: `/creators` → `GET/POST /api/v1/creators` (optional `contactEmail`)
-- Lists: `/api/v1/creators/lists` + members
-- Campaigns: `/campaigns` → `/api/v1/creators/campaigns`
-- Outreach: `/outreach` → templates + `POST /api/v1/outreach/send` ({{handle}} tokens)
-- No TikTok crawl/API yet — manual handles only
+- Creators CRM, lists, campaigns, outreach, affiliate invites
+- Discovery + TikTok Shop OpenAPI (per-shop OAuth)
+- Crawl/sync via Discovery backoffice (not a separate crawler page)
 
 ## Observability
 
@@ -66,13 +64,12 @@ Never commit vault keys, IMAP passwords, or Stripe secrets.
 ## Health
 
 - `GET http://localhost:4000/health` → `{ ok: true }`
-- Crawler dry-run: backoffice `/backoffice/crawler` → Run dry check (needs Redis + worker)
 
 ## Migrations
 
 ```bash
-npm run db:migrate:prod   # deploy
-npm run db:migrate:dev    # create during development
+npm run db:migrate:deploy   # deploy
+npm run db:migrate:dev      # create during development
 npm run db:status
 ```
 
@@ -80,9 +77,9 @@ npm run db:status
 
 - [ ] Postgres + Redis reachable; backups scheduled
 - [ ] `TRUST_PROXY=true` behind load balancer
-- [ ] Strong JWT + `SESSION_VAULT_KEY` (≥32 chars)
+- [ ] Strong JWT + `SESSION_VAULT_KEY` (prefer 64 hex chars) + `PORTAL_BFF_SECRET`
 - [ ] Stripe live keys only on prod; webhook endpoint verified
 - [ ] SMTP configured; test invite + reset emails
-- [ ] `SHOP_VERIFY_MODE=stub` or dry-run until live URLs validated
+- [ ] Shop verify: `SHOP_VERIFY_MODE=playwright`, dry-run off, `SHOP_VERIFY_TARGET=live`
 - [ ] Optional `SENTRY_DSN` when error tracking wired
-- [ ] Rate limits: auth + shop verify + creators write (Redis)
+- [ ] Rate limits: auth fail-closed when Redis down

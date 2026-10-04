@@ -193,13 +193,25 @@ async function applyPlanAndSubscription(input: {
       data.dailyInviteQuota = plan.dailyInviteQuota;
       nextPlanCode = plan.code;
       nextPlanMonthlyCents = plan.monthlyPriceCents;
-    } else if (input.stripePriceId || input.planCode) {
-      logger.warn("stripe webhook: plan not resolved for paid status", {
+    } else if (
+      (input.status === "ACTIVE" ||
+        input.status === "TRIALING" ||
+        input.status === "PAST_DUE") &&
+      (input.stripePriceId || input.planCode)
+    ) {
+      // Fail the event so Stripe retries / ops can fix price↔plan mapping.
+      // Do not grant paid status with unresolved / free plan limits.
+      logger.error("stripe webhook: plan not resolved for paid status", {
         organizationId: input.organizationId,
         stripePriceId: input.stripePriceId,
         planCode: input.planCode,
         status: input.status,
       });
+      throw new AppError(
+        "FAILED_PRECONDITION",
+        `Stripe plan not resolved for status ${input.status} (price=${input.stripePriceId ?? "none"} planCode=${input.planCode ?? "none"})`,
+        500,
+      );
     }
   }
 

@@ -130,21 +130,34 @@ function clientKey(req: Request): string {
 
 /**
  * Redis sliding-window rate limiter.
- * When Redis is unreachable, requests are allowed through (fail open)
- * so local/dev API stays usable; production should keep Redis reachable.
+ * - failClosed=false (default): allow through when Redis is down (non-auth).
+ * - failClosed=true: 503 when Redis is down (use on auth routes).
  */
 export function rateLimit({
   key,
   limit,
   windowSec,
+  failClosed = false,
 }: {
   key: (req: Request) => string;
   limit: number;
   windowSec: number;
+  /** When true, Redis outage rejects instead of allowing (auth). */
+  failClosed?: boolean;
 }): RequestHandler {
   return async (req, _res, next) => {
     try {
       if (!(await ensureRedis())) {
+        if (failClosed) {
+          next(
+            new AppError(
+              "SERVICE_UNAVAILABLE",
+              "Rate limiter unavailable; try again shortly",
+              503,
+            ),
+          );
+          return;
+        }
         next();
         return;
       }
@@ -180,9 +193,18 @@ export function rateLimit({
         next(err);
         return;
       }
-      // Redis command failure — fail open, then re-probe after cooldown
       lastProbeFailureAt = Date.now();
       markDegraded(err);
+      if (failClosed) {
+        next(
+          new AppError(
+            "SERVICE_UNAVAILABLE",
+            "Rate limiter unavailable; try again shortly",
+            503,
+          ),
+        );
+        return;
+      }
       next();
     }
   };

@@ -47,7 +47,7 @@ function appCredentials() {
 }
 
 function stateSecret() {
-  return env.JWT_ACCESS_SECRET;
+  return env.TIKTOK_OAUTH_STATE_SECRET ?? env.JWT_ACCESS_SECRET;
 }
 
 export function signOAuthState(payload: OAuthStatePayload): string {
@@ -104,6 +104,11 @@ export function buildAuthorizeUrl(input: {
   return url.toString();
 }
 
+/**
+ * TikTok Shop token endpoints require GET with app_secret in the query string
+ * (Partner API constraint — cannot move secret to a POST body).
+ * Never log the request URL; only log status/code/message.
+ */
 async function tokenGet(query: Record<string, string>): Promise<TikTokTokenPayload> {
   const { appKey, appSecret } = appCredentials();
   const qs = new URLSearchParams({
@@ -133,6 +138,7 @@ async function tokenGet(query: Record<string, string>): Promise<TikTokTokenPaylo
       status: res.status,
       code: json?.code,
       message: json?.message,
+      // Intentionally omit URL / app_secret / tokens
     });
     throw new AppError(
       "BAD_GATEWAY",
@@ -165,6 +171,7 @@ export async function exchangeAuthCode(authCode: string) {
 
 export async function refreshAccessToken(refreshToken: string) {
   const { appKey, appSecret } = appCredentials();
+  // TikTok requires app_secret on the query string for this GET endpoint.
   const qs = new URLSearchParams({
     app_key: appKey,
     app_secret: appSecret,
@@ -189,6 +196,11 @@ export async function refreshAccessToken(refreshToken: string) {
   } | null;
 
   if (!res.ok || !json || json.code !== 0 || !json.data?.access_token) {
+    logger.error("tiktok oauth token refresh failed", {
+      status: res.status,
+      code: json?.code,
+      message: json?.message,
+    });
     throw new AppError(
       "UNAUTHORIZED",
       json?.message ?? "TikTok token refresh failed; re-authorize the shop",

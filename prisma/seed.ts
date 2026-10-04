@@ -391,30 +391,20 @@ async function main() {
       allowedPlatformRoles: [PlatformRole.SUPERADMIN],
     },
     {
-      key: "proxies",
-      label: "Proxies",
-      href: "/backoffice/proxies",
-      icon: "Globe",
-      sortOrder: 7,
-      allowedPlatformRoles: [PlatformRole.SUPERADMIN, PlatformRole.OPS],
-    },
-    {
-      key: "crawler",
-      label: "Crawler",
-      href: "/backoffice/crawler",
-      icon: "Bot",
-      sortOrder: 8,
-      allowedPlatformRoles: [PlatformRole.SUPERADMIN, PlatformRole.OPS],
-    },
-    {
       key: "navigation",
       label: "Navigation",
       href: "/backoffice/navigation",
       icon: "Menu",
-      sortOrder: 9,
+      sortOrder: 8,
       allowedPlatformRoles: [PlatformRole.SUPERADMIN],
     },
   ]);
+
+  // Retire unused scaffold nav (proxies pool + crawler dry-run were never productized).
+  await prisma.navItem.updateMany({
+    where: { key: { in: ["proxies", "crawler"] } },
+    data: { enabled: false },
+  });
 
   const superadminEmail = await seedSuperadmin();
 

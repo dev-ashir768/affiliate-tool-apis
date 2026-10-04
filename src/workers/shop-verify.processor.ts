@@ -1,5 +1,7 @@
 import { UnrecoverableError, Worker, type Job } from "bullmq";
 import { prisma } from "../lib/prisma.js";
+import { AppError } from "../lib/errors.js";
+import { assertShopVerifySafeForEnv } from "../lib/production-guards.js";
 import { bullConnection, SHOP_VERIFY_QUEUE } from "../lib/queue.js";
 import { runPlaywrightVerify } from "./shop-verify.playwright.scaffold.js";
 import { isShopVerifyTerminalError } from "./shop-verify.errors.js";
@@ -20,6 +22,22 @@ const ACTIVATABLE_STATUSES = new Set([
 
 export async function processShopVerify(job: Job<ShopVerifyJobData>) {
   const { shopId, mode, verificationJobId } = job.data;
+
+  try {
+    assertShopVerifySafeForEnv();
+  } catch (err) {
+    const message =
+      err instanceof AppError ? err.message : "Shop verify blocked in this environment";
+    await prisma.shop.updateMany({
+      where: { id: shopId, status: { in: ["PENDING_INVITE", "VERIFYING", "FAILED"] } },
+      data: { status: "FAILED", statusReason: message },
+    });
+    await prisma.shopVerificationJob.updateMany({
+      where: { id: verificationJobId },
+      data: { status: "FAILED", lastError: message },
+    });
+    throw new UnrecoverableError(message);
+  }
 
   const shop = await prisma.shop.findUnique({ where: { id: shopId } });
   if (!shop) {

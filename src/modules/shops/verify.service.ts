@@ -1,6 +1,7 @@
 import { env } from "../../config/env.js";
 import { AppError } from "../../lib/errors.js";
 import { logger } from "../../lib/logger.js";
+import { assertShopVerifySafeForEnv } from "../../lib/production-guards.js";
 import { prisma } from "../../lib/prisma.js";
 import { shopVerifyQueue } from "../../lib/queue.js";
 import type { ShopVerifyJobData } from "../../workers/shop-verify.processor.js";
@@ -16,6 +17,8 @@ function shouldEnqueue(): boolean {
 }
 
 export async function requestVerify(organizationId: string, shopId: string) {
+  assertShopVerifySafeForEnv();
+
   const shop = await prisma.shop.findFirst({
     where: { id: shopId, organizationId },
   });
@@ -56,8 +59,11 @@ export async function requestVerify(organizationId: string, shopId: string) {
 
   try {
     const bullJob = await shopVerifyQueue.add("verify", jobData, {
+      jobId: `shop-verify:${shop.id}`,
       attempts: 3,
       backoff: { type: "exponential", delay: 2000 },
+      removeOnComplete: true,
+      removeOnFail: true,
     });
     await prisma.shopVerificationJob.update({
       where: { id: verificationJob.id },

@@ -59,6 +59,7 @@ describe("shop verify stub", () => {
         planId,
         seatLimit: 1,
         shopLimit: 10,
+        botLimit: 10,
         dailyInviteQuota: 0,
       },
     });
@@ -70,6 +71,15 @@ describe("shop verify stub", () => {
         organizationId: org.id,
         role: "OWNER",
         status: "ACTIVE",
+      },
+    });
+
+    await prisma.subscription.create({
+      data: {
+        organizationId: org.id,
+        stripeSubscriptionId: `sub_test_verify_${suffix}`,
+        status: "ACTIVE",
+        currentPeriodEnd: new Date(Date.now() + 86400_000),
       },
     });
   }, 60000);
@@ -102,6 +112,7 @@ describe("shop verify stub", () => {
         await prisma.botIdentity.deleteMany({ where: { id: { in: ownedBotIds } } });
       }
       if (orgId) {
+        await prisma.subscription.deleteMany({ where: { organizationId: orgId } });
         await prisma.membership.deleteMany({ where: { organizationId: orgId } });
         await prisma.organization.delete({ where: { id: orgId } });
       }
@@ -230,7 +241,9 @@ describe("shop verify stub", () => {
     const accessToken = await signAccessToken({
       sub: ownerId,
       orgId,
-      role: "OWNER",
+      orgRole: "OWNER",
+      platformRole: null,
+      hasProductAccess: true,
     });
 
     const res = await request(app)

@@ -29,9 +29,9 @@ describe("rateLimit middleware", () => {
     (redis as { status: string }).status = "wait";
   });
 
-  it("fails open when Redis is unavailable", async () => {
+  it("fails open when Redis is unavailable (default)", async () => {
     const mw = rateLimit({
-      key: rateLimitKey("auth"),
+      key: rateLimitKey("creators"),
       limit: 2,
       windowSec: 60,
     });
@@ -39,6 +39,21 @@ describe("rateLimit middleware", () => {
     await mw(mockReq(), {} as Response, next);
     expect(next).toHaveBeenCalledOnce();
     expect(next.mock.calls[0]?.[0]).toBeUndefined();
+  });
+
+  it("fails closed when Redis is unavailable and failClosed=true", async () => {
+    const mw = rateLimit({
+      key: rateLimitKey("auth"),
+      limit: 2,
+      windowSec: 60,
+      failClosed: true,
+    });
+    const next = vi.fn() as NextFunction;
+    await mw(mockReq(), {} as Response, next);
+    expect(next).toHaveBeenCalledOnce();
+    const err = next.mock.calls[0]?.[0];
+    expect(err).toBeInstanceOf(AppError);
+    expect((err as AppError).status).toBe(503);
   });
 
   it("returns 429 AppError when over limit", async () => {

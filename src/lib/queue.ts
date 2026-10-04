@@ -2,7 +2,6 @@ import { Queue } from "bullmq";
 import { env } from "../config/env.js";
 
 export const SHOP_VERIFY_QUEUE = "shop-verify";
-export const CRAWLER_QUEUE = "crawler-check";
 export const DISCOVERY_SYNC_QUEUE = "discovery-sync";
 export const OUTREACH_SEND_QUEUE = "outreach-send";
 export const AFFILIATE_INVITE_QUEUE = "affiliate-invite";
@@ -19,7 +18,6 @@ export function bullConnection() {
 }
 
 let _shopVerifyQueue: Queue | null = null;
-let _crawlerQueue: Queue | null = null;
 let _discoverySyncQueue: Queue | null = null;
 let _outreachSendQueue: Queue | null = null;
 let _affiliateInviteQueue: Queue | null = null;
@@ -33,15 +31,6 @@ export function getShopVerifyQueue(): Queue {
     });
   }
   return _shopVerifyQueue;
-}
-
-export function getCrawlerQueue(): Queue {
-  if (!_crawlerQueue) {
-    _crawlerQueue = new Queue(CRAWLER_QUEUE, {
-      connection: bullConnection(),
-    });
-  }
-  return _crawlerQueue;
 }
 
 export function getDiscoverySyncQueue(): Queue {
@@ -83,11 +72,6 @@ export function getAutomationRunQueue(): Queue {
 export const shopVerifyQueue = {
   add: (...args: Parameters<Queue["add"]>) => getShopVerifyQueue().add(...args),
   close: () => (_shopVerifyQueue ? _shopVerifyQueue.close() : Promise.resolve()),
-};
-
-export const crawlerQueue = {
-  add: (...args: Parameters<Queue["add"]>) => getCrawlerQueue().add(...args),
-  close: () => (_crawlerQueue ? _crawlerQueue.close() : Promise.resolve()),
 };
 
 export const discoverySyncQueue = {

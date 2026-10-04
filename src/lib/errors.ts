@@ -8,6 +8,7 @@ export type ErrorCode =
   | "CONFLICT"
   | "NOT_FOUND"
   | "RATE_LIMITED"
+  | "SERVICE_UNAVAILABLE"
   | "FAILED_PRECONDITION"
   | "BAD_GATEWAY"
   | "INTERNAL"

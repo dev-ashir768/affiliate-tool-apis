@@ -354,41 +354,6 @@ const collection = {
       ],
     },
     {
-      name: "Platform — Proxies & Crawler",
-      item: [
-        req("List Proxies", "GET", "/api/v1/platform/proxies"),
-        req("Create Proxy", "POST", "/api/v1/platform/proxies", {
-          body: {
-            label: "proxy-{{$timestamp}}",
-            host: "127.0.0.1",
-            port: 8080,
-            protocol: "HTTP",
-          },
-          event: [
-            {
-              listen: "test",
-              script: {
-                type: "text/javascript",
-                exec: [
-                  "if (pm.response.code === 201) {",
-                  "  const j = pm.response.json();",
-                  "  if (j.id) pm.collectionVariables.set('proxyId', j.id);",
-                  "}",
-                ],
-              },
-            },
-          ],
-        }),
-        req("Patch Proxy", "PATCH", "/api/v1/platform/proxies/{{proxyId}}", {
-          body: { status: "AVAILABLE" },
-        }),
-        req("Crawler Status", "GET", "/api/v1/platform/crawler"),
-        req("Crawler Run", "POST", "/api/v1/platform/crawler/run", {
-          body: {},
-        }),
-      ],
-    },
-    {
       name: "Platform — Creators",
       item: [
         req("List Platform Creators", "GET", "/api/v1/platform/creators"),

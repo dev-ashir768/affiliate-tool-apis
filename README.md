@@ -94,5 +94,5 @@ SMOKE_HTTP=1 npm test -- tests/smoke/foundation.http.test.ts
 | `npm run worker` | Shop-verify worker with watch |
 | `npm run smoke` | Foundation end-to-end smoke |
 | `npm test` | Vitest suite |
-| `npm run prisma:migrate` | `prisma migrate deploy` |
-| `npm run prisma:seed` | Seed plans/bots |
+| `npm run db:migrate:deploy` | `prisma migrate deploy` |
+| `npm run db:seed` | Seed plans/bots/nav |

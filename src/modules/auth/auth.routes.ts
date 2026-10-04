@@ -31,17 +31,49 @@ authRoutes.use(
     key: rateLimitKey("auth"),
     limit: 20,
     windowSec: 60,
+    failClosed: true,
   })
 );
+
+function cookieSecure(): boolean {
+  if (env.COOKIE_SECURE !== undefined) return env.COOKIE_SECURE;
+  return env.NODE_ENV === "production";
+}
 
 function refreshCookieOptions(): CookieOptions {
   return {
     httpOnly: true,
     sameSite: "lax",
-    secure: env.NODE_ENV === "production",
+    secure: cookieSecure(),
     maxAge: refreshTtl() * 1000,
     path: "/",
   };
+}
+
+/**
+ * Include refreshToken in JSON only for trusted portal BFF.
+ * - PORTAL_BFF_SECRET unset: legacy behavior (return token; set secret in prod to lock down)
+ * - secret set: require matching X-Portal-Bff-Secret header
+ */
+function mayReturnRefreshInBody(req: { headers: { [key: string]: unknown } }): boolean {
+  const configured = env.PORTAL_BFF_SECRET;
+  if (!configured) return true;
+  const header = req.headers["x-portal-bff-secret"];
+  const value = Array.isArray(header) ? header[0] : header;
+  return typeof value === "string" && value === configured;
+}
+
+function authTokenPayload(
+  req: { headers: Record<string, unknown> },
+  tokens: { accessToken: string; refreshToken: string },
+) {
+  if (mayReturnRefreshInBody(req)) {
+    return {
+      accessToken: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
+    };
+  }
+  return { accessToken: tokens.accessToken };
 }
 
 function setRefreshCookie(res: Response, refreshToken: string) {
@@ -52,7 +84,7 @@ function clearRefreshCookie(res: Response) {
   res.clearCookie("refresh_token", {
     httpOnly: true,
     sameSite: "lax",
-    secure: env.NODE_ENV === "production",
+    secure: cookieSecure(),
     path: "/",
   });
 }
@@ -79,8 +111,7 @@ authRoutes.post("/register", validateBody(registerSchema), async (req, res, next
       organization: result.organization,
       platformMembership: result.platformMembership,
       redirectTo: result.redirectTo,
-      accessToken: result.accessToken,
-      refreshToken: result.refreshToken,
+      ...authTokenPayload(req, result),
     });
   } catch (err) {
     next(err);
@@ -96,8 +127,7 @@ authRoutes.post("/login", validateBody(loginSchema), async (req, res, next) => {
       organizationId: result.organizationId,
       platformMembership: result.platformMembership,
       redirectTo: result.redirectTo,
-      accessToken: result.accessToken,
-      refreshToken: result.refreshToken,
+      ...authTokenPayload(req, result),
     });
   } catch (err) {
     next(err);
@@ -122,10 +152,7 @@ authRoutes.post("/refresh", validateBody(refreshSchema), async (req, res, next) 
     }
     const result = await rotateRefresh(raw, preferredOrgId);
     setRefreshCookie(res, result.refreshToken);
-    res.json({
-      accessToken: result.accessToken,
-      refreshToken: result.refreshToken,
-    });
+    res.json(authTokenPayload(req, result));
   } catch (err) {
     next(err);
   }

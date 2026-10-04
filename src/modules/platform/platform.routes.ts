@@ -5,26 +5,19 @@ import { validateBody, validateQuery } from "../../middleware/validate.js";
 import { authenticate } from "../../middleware/authenticate.js";
 import { requirePlatform } from "../../middleware/require-platform.js";
 import {
-  createProxySchema,
   createPlatformCreatorSchema,
   createStaffSchema,
   listQuerySchema,
   patchPlatformCreatorSchema,
-  patchProxySchema,
   patchStaffSchema,
 } from "./platform.schemas.js";
 import {
   billingOverview,
-  createProxy,
   createStaff,
-  crawlerStatus,
-  enqueueCrawlerDryRun,
   getOrganization,
   listOrganizations,
   listPlatformShops,
-  listProxies,
   listStaff,
-  patchProxy,
   patchStaff,
   listAuditLogs,
 } from "./platform.service.js";
@@ -149,72 +142,6 @@ platformRoutes.get(
     try {
       const overview = await billingOverview();
       res.json(overview);
-    } catch (err) {
-      next(err);
-    }
-  },
-);
-
-platformRoutes.get(
-  "/proxies",
-  requirePlatform("SUPERADMIN", "OPS"),
-  validateQuery(listQuerySchema),
-  async (req, res, next) => {
-    try {
-      res.json(await listProxies(req.query as any));
-    } catch (err) {
-      next(err);
-    }
-  },
-);
-
-platformRoutes.post(
-  "/proxies",
-  requirePlatform("SUPERADMIN", "OPS"),
-  validateBody(createProxySchema),
-  async (req, res, next) => {
-    try {
-      const proxy = await createProxy(req.body);
-      res.status(201).json(proxy);
-    } catch (err) {
-      next(err);
-    }
-  },
-);
-
-platformRoutes.patch(
-  "/proxies/:id",
-  requirePlatform("SUPERADMIN", "OPS"),
-  validateBody(patchProxySchema),
-  async (req, res, next) => {
-    try {
-      const proxy = await patchProxy(String(req.params.id), req.body);
-      res.json(proxy);
-    } catch (err) {
-      next(err);
-    }
-  },
-);
-
-platformRoutes.get(
-  "/crawler",
-  requirePlatform("SUPERADMIN", "OPS"),
-  async (_req, res, next) => {
-    try {
-      res.json(await crawlerStatus());
-    } catch (err) {
-      next(err);
-    }
-  },
-);
-
-platformRoutes.post(
-  "/crawler/run",
-  requirePlatform("SUPERADMIN", "OPS"),
-  async (req, res, next) => {
-    try {
-      const result = await enqueueCrawlerDryRun(req.auth?.sub);
-      res.status(202).json(result);
     } catch (err) {
       next(err);
     }

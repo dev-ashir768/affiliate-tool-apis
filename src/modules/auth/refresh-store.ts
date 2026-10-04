@@ -137,6 +137,8 @@ export async function isRefreshMirrored(hash: string) {
   if (await ensureRedis()) {
     return (await redis.exists(`refresh:${hash}`)) === 1;
   }
+  // Production: never accept in-memory mirror (multi-instance / revocation unsafe).
+  if (env.NODE_ENV === "production") return false;
   return memoryAlive(hash);
 }
 

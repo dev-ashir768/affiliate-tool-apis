@@ -200,40 +200,60 @@ async function markCreatorInvited(creatorId: string, stage: CreatorStage) {
 
 /** Deliver a single QUEUED outreach message (used by worker + sync send). */
 export async function deliverOutreachMessage(messageId: string) {
-  const message = await prisma.outreachMessage.findUnique({
+  const existing = await prisma.outreachMessage.findUnique({
     where: { id: messageId },
-    include: {
-      creator: true,
-    },
+    include: { creator: true },
   });
-  if (!message) return { ok: false as const, reason: "not_found" };
-  if (message.status === "SENT") {
+  if (!existing) return { ok: false as const, reason: "not_found" };
+  if (existing.status === "SENT") {
     return { ok: true as const, status: "SENT" as const };
   }
-  if (!message.toEmail) {
+  if (existing.status !== "QUEUED" && existing.status !== "SENDING") {
+    return { ok: false as const, reason: `status_${existing.status}` };
+  }
+  if (!existing.toEmail) {
     await prisma.outreachMessage.update({
-      where: { id: message.id },
+      where: { id: existing.id },
       data: { status: "FAILED", lastError: "Creator has no contactEmail" },
     });
     return { ok: false as const, reason: "no_email" };
   }
 
+  // Claim QUEUED → SENDING before provider call so a crash after send
+  // cannot leave the row QUEUED for a duplicate retry.
+  if (existing.status === "QUEUED") {
+    const claimed = await prisma.outreachMessage.updateMany({
+      where: { id: messageId, status: "QUEUED" },
+      data: { status: "SENDING", lastError: null },
+    });
+    if (claimed.count === 0) {
+      const again = await prisma.outreachMessage.findUnique({
+        where: { id: messageId },
+      });
+      if (again?.status === "SENT") {
+        return { ok: true as const, status: "SENT" as const };
+      }
+      // Another worker claimed it; do not send again.
+      return { ok: false as const, reason: "not_claimable" };
+    }
+  }
+
   try {
     await sendOutreachEmail({
-      to: message.toEmail,
-      subject: message.subject,
-      bodyText: message.bodyText,
+      to: existing.toEmail,
+      subject: existing.subject,
+      bodyText: existing.bodyText,
     });
     await prisma.outreachMessage.update({
-      where: { id: message.id },
+      where: { id: existing.id },
       data: { status: "SENT", sentAt: new Date(), lastError: null },
     });
-    await markCreatorInvited(message.creatorId, message.creator.stage);
+    await markCreatorInvited(existing.creatorId, existing.creator.stage);
     return { ok: true as const, status: "SENT" as const };
   } catch (err) {
     const msg = err instanceof Error ? err.message : "send failed";
     await prisma.outreachMessage.update({
-      where: { id: message.id },
+      where: { id: existing.id },
       data: { status: "FAILED", lastError: msg },
     });
     logger.info("outreach deliver failed", { messageId, error: msg });

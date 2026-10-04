@@ -51,6 +51,7 @@ describe("shop verify playwright", () => {
         planId,
         seatLimit: 1,
         shopLimit: 10,
+        botLimit: 10,
         dailyInviteQuota: 0,
       },
     });
@@ -64,6 +65,15 @@ describe("shop verify playwright", () => {
         status: "ACTIVE",
       },
     });
+
+    await prisma.subscription.create({
+      data: {
+        organizationId: org.id,
+        stripeSubscriptionId: `sub_test_pw_${suffix}`,
+        status: "ACTIVE",
+        currentPeriodEnd: new Date(Date.now() + 86400_000),
+      },
+    });
   }, 60000);
 
   afterAll(async () => {
@@ -74,8 +84,9 @@ describe("shop verify playwright", () => {
         });
         await prisma.shop.deleteMany({ where: { id: { in: createdShopIds } } });
       }
-      await prisma.membership.deleteMany({ where: { organizationId: orgId } });
       if (orgId) {
+        await prisma.subscription.deleteMany({ where: { organizationId: orgId } });
+        await prisma.membership.deleteMany({ where: { organizationId: orgId } });
         await prisma.organization.delete({ where: { id: orgId } }).catch(() => undefined);
       }
       await prisma.user.deleteMany({ where: { email: ownerEmail } });
