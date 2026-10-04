@@ -5,10 +5,25 @@ import { AppError } from "../lib/errors.js";
 
 const FULL_ACCESS_STATUSES: SubscriptionStatus[] = ["ACTIVE", "TRIALING"];
 
+export function isManualSubscriptionId(id: string): boolean {
+  return id.startsWith("manual_");
+}
+
 export function subscriptionGrantsAccess(
-  subscription: Pick<Subscription, "status" | "currentPeriodEnd"> | null | undefined,
+  subscription:
+    | Pick<Subscription, "status" | "currentPeriodEnd" | "stripeSubscriptionId">
+    | null
+    | undefined,
 ): boolean {
   if (!subscription) return false;
+
+  if (
+    isManualSubscriptionId(subscription.stripeSubscriptionId) &&
+    subscription.currentPeriodEnd != null &&
+    Date.now() > subscription.currentPeriodEnd.getTime()
+  ) {
+    return false;
+  }
 
   if (FULL_ACCESS_STATUSES.includes(subscription.status)) {
     return true;
