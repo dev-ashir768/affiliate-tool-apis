@@ -12,7 +12,7 @@ export function manualSubscriptionId(organizationId: string) {
 
 export async function grantOrganizationAccess(
   organizationId: string,
-  input: { planCode: string; currentPeriodEnd?: string | null; note?: string },
+  input: { planCode: string; currentPeriodEnd: string; note?: string },
   actorUserId: string,
 ) {
   const org = await prisma.organization.findUnique({
@@ -40,16 +40,13 @@ export async function grantOrganizationAccess(
     throw new AppError("VALIDATION_ERROR", "Paid active plan required", 400);
   }
 
-  let periodEnd: Date | null = null;
-  if (input.currentPeriodEnd) {
-    periodEnd = new Date(input.currentPeriodEnd);
-    if (Number.isNaN(periodEnd.getTime()) || periodEnd.getTime() <= Date.now()) {
-      throw new AppError(
-        "VALIDATION_ERROR",
-        "currentPeriodEnd must be a future datetime",
-        400,
-      );
-    }
+  const periodEnd = new Date(input.currentPeriodEnd);
+  if (Number.isNaN(periodEnd.getTime()) || periodEnd.getTime() <= Date.now()) {
+    throw new AppError(
+      "VALIDATION_ERROR",
+      "currentPeriodEnd must be a future datetime",
+      400,
+    );
   }
 
   const subId = manualSubscriptionId(organizationId);

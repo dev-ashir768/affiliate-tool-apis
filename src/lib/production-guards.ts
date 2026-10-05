@@ -64,6 +64,22 @@ export function assertProductionBootConfig(): void {
     );
   }
 
+  if (!env.PORTAL_BASE_URL?.trim()) {
+    throw new Error(
+      "PORTAL_BASE_URL is required in production for Stripe return URLs, invites, and password-reset links.",
+    );
+  }
+
+  try {
+    const portal = new URL(env.PORTAL_BASE_URL.trim());
+    if (portal.protocol !== "https:") {
+      throw new Error("PORTAL_BASE_URL must use https in production.");
+    }
+  } catch (err) {
+    if (err instanceof Error && err.message.includes("https")) throw err;
+    throw new Error("PORTAL_BASE_URL must be a valid absolute URL.");
+  }
+
   const vault = env.SESSION_VAULT_KEY.trim();
   if (!/^[0-9a-fA-F]{64}$/.test(vault) && Buffer.byteLength(vault, "utf8") < 32) {
     throw new Error(

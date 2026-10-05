@@ -175,10 +175,13 @@ describe("platform grant/revoke access", () => {
   });
 
   it("grants manual access to a free org", async () => {
+    const currentPeriodEnd = new Date(
+      Date.now() + 30 * 86400_000,
+    ).toISOString();
     const res = await request(app)
       .post(`/api/v1/platform/organizations/${orgAId}/grant-access`)
       .set("Authorization", `Bearer ${superadminToken}`)
-      .send({ planCode: starterCode });
+      .send({ planCode: starterCode, currentPeriodEnd });
 
     expect(res.status).toBe(200);
     expect(res.body.billingSource).toBe("manual");
@@ -208,30 +211,48 @@ describe("platform grant/revoke access", () => {
   }, 60000);
 
   it("rejects grant on an org with a real Stripe subscription (409)", async () => {
+    const currentPeriodEnd = new Date(
+      Date.now() + 30 * 86400_000,
+    ).toISOString();
     const res = await request(app)
       .post(`/api/v1/platform/organizations/${orgBId}/grant-access`)
       .set("Authorization", `Bearer ${superadminToken}`)
-      .send({ planCode: starterCode });
+      .send({ planCode: starterCode, currentPeriodEnd });
 
     expect(res.status).toBe(409);
   }, 60000);
 
   it("allows grant when existing Stripe subscription is CANCELED", async () => {
+    const currentPeriodEnd = new Date(
+      Date.now() + 30 * 86400_000,
+    ).toISOString();
     const res = await request(app)
       .post(`/api/v1/platform/organizations/${orgCId}/grant-access`)
       .set("Authorization", `Bearer ${superadminToken}`)
-      .send({ planCode: starterCode });
+      .send({ planCode: starterCode, currentPeriodEnd });
 
     expect(res.status).toBe(200);
     expect(res.body.billingSource).toBe("manual");
     expect(res.body.stripeSubscriptionId).toBe(`manual_${orgCId}`);
   }, 60000);
 
-  it("rejects grant with planCode free (400)", async () => {
+  it("rejects grant without currentPeriodEnd (400)", async () => {
     const res = await request(app)
       .post(`/api/v1/platform/organizations/${orgAId}/grant-access`)
       .set("Authorization", `Bearer ${superadminToken}`)
-      .send({ planCode: "free" });
+      .send({ planCode: starterCode });
+
+    expect(res.status).toBe(400);
+  }, 60000);
+
+  it("rejects grant with planCode free (400)", async () => {
+    const currentPeriodEnd = new Date(
+      Date.now() + 30 * 86400_000,
+    ).toISOString();
+    const res = await request(app)
+      .post(`/api/v1/platform/organizations/${orgAId}/grant-access`)
+      .set("Authorization", `Bearer ${superadminToken}`)
+      .send({ planCode: "free", currentPeriodEnd });
 
     expect(res.status).toBe(400);
   }, 60000);
@@ -263,10 +284,13 @@ describe("platform grant/revoke access", () => {
   }, 60000);
 
   it("rejects OPS token grant attempts (403)", async () => {
+    const currentPeriodEnd = new Date(
+      Date.now() + 30 * 86400_000,
+    ).toISOString();
     const res = await request(app)
       .post(`/api/v1/platform/organizations/${orgAId}/grant-access`)
       .set("Authorization", `Bearer ${opsToken}`)
-      .send({ planCode: starterCode });
+      .send({ planCode: starterCode, currentPeriodEnd });
 
     expect(res.status).toBe(403);
   }, 60000);
