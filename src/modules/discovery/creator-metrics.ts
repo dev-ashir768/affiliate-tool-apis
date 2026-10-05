@@ -35,8 +35,6 @@ export type MarketplaceMetrics = {
   metricsSyncedAt: Date;
 };
 
-type MoneyLike = { amount?: string; currency?: string } | null | undefined;
-
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   return value as Record<string, unknown>;
@@ -179,13 +177,6 @@ function extractBio(raw: Record<string, unknown>): string | null {
     asString(raw.introduction) ??
     asString(raw.profile_bio)
   );
-}
-
-export function moneyAmount(value: MoneyLike): {
-  amount: string | null;
-  currency: string | null;
-} {
-  return moneyFrom(value);
 }
 
 export function formatGmvBio(input: {

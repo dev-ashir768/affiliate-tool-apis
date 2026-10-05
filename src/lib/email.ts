@@ -127,10 +127,6 @@ export function getEmailProvider(): EmailProvider {
   return cached;
 }
 
-export function resetEmailProviderForTests() {
-  cached = null;
-}
-
 async function dispatch(
   to: string,
   subject: string,

@@ -151,8 +151,7 @@ async function main() {
       sortOrder: 30,
       isPublic: true,
       active: true,
-      stripePriceId:
-        process.env.STRIPE_PRICE_PRO ?? process.env.STRIPE_PRICE_AGENCY ?? null,
+      stripePriceId: process.env.STRIPE_PRICE_PRO ?? null,
     },
   ];
 

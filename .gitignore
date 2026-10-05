@@ -8,3 +8,10 @@ coverage/
 .DS_Store
 
 logs/
+
+# Agent / SDD session artifacts
+.superpowers/
+.agents/
+.claude/
+.devin/
+

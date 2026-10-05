@@ -13,9 +13,7 @@ describe("platform grant/revoke access", () => {
   let freePlanId = "";
   let starterCode = "";
 
-  let superadminUserId = "";
   let superadminToken = "";
-  let opsUserId = "";
   let opsToken = "";
 
   let orgAId = ""; // free org, will be granted/revoked
@@ -46,7 +44,6 @@ describe("platform grant/revoke access", () => {
         name: "Grant Superadmin",
       },
     });
-    superadminUserId = superadmin.id;
     userIds.push(superadmin.id);
 
     await prisma.platformMembership.create({
@@ -68,7 +65,6 @@ describe("platform grant/revoke access", () => {
         name: "Grant Ops",
       },
     });
-    opsUserId = ops.id;
     userIds.push(ops.id);
 
     await prisma.platformMembership.create({

@@ -8,7 +8,6 @@ const schema = z.object({
   DATABASE_URL: z.string().min(1),
   REDIS_URL: z.string().min(1),
   JWT_ACCESS_SECRET: z.string().min(32),
-  JWT_REFRESH_SECRET: z.string().min(32),
   /**
    * AES-256 vault key. Preferred: 64 hex chars (32 bytes).
    * Legacy: any string ≥32 chars (first 32 UTF-8 bytes / sha256 fallback in crypto.ts).
@@ -110,10 +109,6 @@ const schema = z.object({
   ),
   /** Optional platform fallback tokens (dev / single-shop). Prefer per-Shop OAuth. */
   TIKTOK_SHOP_ACCESS_TOKEN: z.preprocess(
-    (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
-    z.string().min(1).optional(),
-  ),
-  TIKTOK_SHOP_REFRESH_TOKEN: z.preprocess(
     (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
     z.string().min(1).optional(),
   ),

@@ -25,7 +25,7 @@ cp .env.example .env
 |----------|---------|
 | `DATABASE_URL` | Postgres connection string |
 | `REDIS_URL` | Redis for refresh mirror, rate limits, BullMQ |
-| `JWT_ACCESS_SECRET` / `JWT_REFRESH_SECRET` | Min 32 chars each |
+| `JWT_ACCESS_SECRET` | Min 32 chars |
 | `SESSION_VAULT_KEY` | 32-byte hex/string for session vault |
 | `CORS_ORIGINS` | Comma-separated origins (portal default `http://localhost:3000`) |
 | `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` | Billing |

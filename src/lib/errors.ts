@@ -11,8 +11,7 @@ export type ErrorCode =
   | "SERVICE_UNAVAILABLE"
   | "FAILED_PRECONDITION"
   | "BAD_GATEWAY"
-  | "INTERNAL"
-  | "NOT_IMPLEMENTED";
+  | "INTERNAL";
 
 export class AppError extends Error {
   constructor(
