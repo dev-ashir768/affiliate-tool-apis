@@ -10,4 +10,7 @@ if (!process.env.JWT_ACCESS_SECRET || process.env.JWT_ACCESS_SECRET.length < 32)
 if (!process.env.SESSION_VAULT_KEY || process.env.SESSION_VAULT_KEY.length < 32) {
   process.env.SESSION_VAULT_KEY = "12345678901234567890123456789012";
 }
+if (!process.env.PORTAL_BFF_SECRET || process.env.PORTAL_BFF_SECRET.length < 16) {
+  process.env.PORTAL_BFF_SECRET = "test-portal-bff-secret";
+}
 process.env.NODE_ENV = "test";

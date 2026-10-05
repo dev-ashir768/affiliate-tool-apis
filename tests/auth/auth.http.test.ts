@@ -3,6 +3,7 @@ import request from "supertest";
 import { createApp } from "../../src/app.js";
 import { prisma } from "../../src/lib/prisma.js";
 import { redis } from "../../src/lib/redis.js";
+import { env } from "../../src/config/env.js";
 
 function cookieHeaderFromSetCookie(
   setCookie: string | string[] | undefined
@@ -12,6 +13,12 @@ function cookieHeaderFromSetCookie(
     .map((c) => c.split(";")[0]?.trim())
     .filter(Boolean)
     .join("; ");
+}
+
+/** Portal BFF header so auth JSON includes refreshToken when secret is configured. */
+function bffHeaders() {
+  const secret = env.PORTAL_BFF_SECRET;
+  return secret ? { "X-Portal-Bff-Secret": secret } : {};
 }
 
 describe("auth HTTP", () => {
@@ -40,6 +47,7 @@ describe("auth HTTP", () => {
   it("register → me → refresh", async () => {
     const registerRes = await request(app)
       .post("/api/v1/auth/register")
+      .set(bffHeaders())
       .send({
         email,
         password,
@@ -66,6 +74,7 @@ describe("auth HTTP", () => {
 
     const refreshRes = await request(app)
       .post("/api/v1/auth/refresh")
+      .set(bffHeaders())
       .send({ refreshToken });
 
     expect(refreshRes.status).toBe(200);
@@ -74,10 +83,44 @@ describe("auth HTTP", () => {
     expect(refreshRes.body.refreshToken).not.toBe(refreshToken);
   }, 60000);
 
+  it("omits refreshToken JSON without BFF secret when secret is configured", async () => {
+    if (!env.PORTAL_BFF_SECRET) return;
+
+    const emailNoBff = `http_nobff_${Date.now()}@test.com`;
+    const registerRes = await request(app)
+      .post("/api/v1/auth/register")
+      .send({
+        email: emailNoBff,
+        password,
+        name: "No Bff",
+        organizationName: "No Bff Org",
+      });
+
+    expect(registerRes.status).toBe(201);
+    expect(registerRes.body.accessToken).toBeTruthy();
+    expect(registerRes.body.refreshToken).toBeUndefined();
+    expect(registerRes.headers["set-cookie"]).toBeDefined();
+
+    const user = await prisma.user.findUnique({ where: { email: emailNoBff } });
+    if (user) {
+      await prisma.refreshToken.deleteMany({ where: { userId: user.id } });
+      const memberships = await prisma.membership.findMany({
+        where: { userId: user.id },
+      });
+      const orgIds = memberships.map((m) => m.organizationId);
+      await prisma.membership.deleteMany({ where: { userId: user.id } });
+      if (orgIds.length) {
+        await prisma.organization.deleteMany({ where: { id: { in: orgIds } } });
+      }
+      await prisma.user.deleteMany({ where: { email: emailNoBff } });
+    }
+  }, 60000);
+
   it("prefers refresh_token cookie over stale body token", async () => {
     const email2 = `http_cookie_${Date.now()}@test.com`;
     const registerRes = await request(app)
       .post("/api/v1/auth/register")
+      .set(bffHeaders())
       .send({
         email: email2,
         password,
@@ -92,6 +135,7 @@ describe("auth HTTP", () => {
     // Rotate so register token is revoked; cookie carries the valid token
     const rotateRes = await request(app)
       .post("/api/v1/auth/refresh")
+      .set(bffHeaders())
       .set("Cookie", cookieHeaderFromSetCookie(registerRes.headers["set-cookie"]))
       .send({});
 
@@ -102,6 +146,7 @@ describe("auth HTTP", () => {
     // Body stale (revoked); cookie valid — cookie must win
     const refreshRes = await request(app)
       .post("/api/v1/auth/refresh")
+      .set(bffHeaders())
       .set("Cookie", cookieHeaderFromSetCookie(rotateRes.headers["set-cookie"]))
       .send({ refreshToken: staleRefresh });
 
