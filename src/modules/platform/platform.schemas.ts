@@ -78,3 +78,18 @@ export const patchPlatformCreatorSchema = z
   .refine((b) => Object.keys(b).length > 0, {
     message: "At least one field is required",
   });
+
+export const listBotsQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce.number().int().min(1).max(100).default(50),
+  search: z.string().optional(),
+  status: z.enum(["AVAILABLE", "RESERVED", "ASSIGNED", "DISABLED"]).optional(),
+});
+
+export const createBotsSchema = z.object({
+  emails: z.array(z.string().trim().email()).min(1).max(100),
+});
+
+export const patchBotSchema = z.object({
+  enabled: z.boolean(),
+});
