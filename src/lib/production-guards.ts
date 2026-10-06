@@ -1,5 +1,6 @@
 import { env } from "../config/env.js";
 import { AppError } from "./errors.js";
+import { logger } from "./logger.js";
 
 /** True when process is running as production. */
 export function isProduction(): boolean {
@@ -8,7 +9,8 @@ export function isProduction(): boolean {
 
 /**
  * Refuse stub / dry-run / fixture shop verify in production.
- * Call before enqueue and before worker activation.
+ * Call before enqueue and before worker activation — not at process boot,
+ * so the API can serve when live TikTok seller verify is not configured yet.
  */
 export function assertShopVerifySafeForEnv(): void {
   if (!isProduction()) return;
@@ -46,15 +48,16 @@ export function assertShopVerifySafeForEnv(): void {
 /**
  * Boot-time checks for API/worker. Throws so misconfigured prod never serves.
  * Local/dev (NODE_ENV≠production) is unaffected.
+ *
+ * Shop-verify live config is NOT required at boot — enforced when verify runs.
+ * EMAIL_PROVIDER=console warns (does not crash) until SMTP is configured.
  */
 export function assertProductionBootConfig(): void {
   if (!isProduction()) return;
 
-  assertShopVerifySafeForEnv();
-
   if (env.EMAIL_PROVIDER === "console") {
-    throw new Error(
-      "EMAIL_PROVIDER=console is not allowed in production. Use EMAIL_PROVIDER=smtp.",
+    logger.warn(
+      "EMAIL_PROVIDER=console in production — transactional email will only log. Set EMAIL_PROVIDER=smtp when ready.",
     );
   }
 
