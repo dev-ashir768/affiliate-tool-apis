@@ -24,9 +24,10 @@ import { sendPasswordResetEmail } from "../../lib/email.js";
 import {
   mirrorRefresh,
   revokeRefreshMirror,
-  isRefreshMirrored,
   refreshTtl,
   getRotationGrace,
+  getRefreshSuccessor,
+  setRefreshSuccessor,
   setRotationGrace,
 } from "./refresh-store.js";
 import {
@@ -287,6 +288,39 @@ async function waitForRotationGrace(hash: string) {
 }
 
 /**
+ * Old token reused after its rotation response was lost: re-issue the
+ * successor while that successor is still live (never used, not revoked).
+ * Logout / password reset / disable revoke the successor, so this stops too.
+ */
+async function recoverFromSuccessor(
+  oldHash: string,
+  hint?: { sub: string; orgId: string | null } | null,
+) {
+  const successorRaw = await getRefreshSuccessor(oldHash);
+  if (!successorRaw) return null;
+  const successorHash = sha256(successorRaw);
+  const successor = await prisma.refreshToken.findUnique({
+    where: { tokenHash: successorHash },
+    include: { user: { select: { status: true } } },
+  });
+  if (
+    !successor ||
+    successor.revokedAt ||
+    successor.expiresAt < new Date() ||
+    successor.user.status === "DISABLED"
+  ) {
+    return null;
+  }
+  const preferredOrgId =
+    hint && hint.sub === successor.userId ? hint.orgId : undefined;
+  const { claims } = await resolveAccessClaims(successor.userId, preferredOrgId);
+  return {
+    accessToken: await signAccessToken(claims),
+    refreshToken: successorRaw,
+  };
+}
+
+/**
  * Rotate a refresh token. `hint` comes from the caller's (possibly expired)
  * access token and only steers which org the new session lands on.
  */
@@ -299,14 +333,17 @@ export async function rotateRefresh(
   const graced = await getRotationGrace(hash);
   if (graced) return graced;
 
-  if (!(await isRefreshMirrored(hash))) throw invalidRefresh();
+  // The DB row (revokedAt / expiresAt) is the source of truth; the Redis
+  // mirror can be lost on a Redis restart and must not log everyone out.
   const stored = await prisma.refreshToken.findUnique({
     where: { tokenHash: hash },
     include: { user: { select: { status: true } } },
   });
   if (!stored || stored.expiresAt < new Date()) throw invalidRefresh();
   if (stored.revokedAt) {
-    const pair = await waitForRotationGrace(hash);
+    const pair =
+      (await waitForRotationGrace(hash)) ??
+      (await recoverFromSuccessor(hash, hint));
     if (pair) return pair;
     throw invalidRefresh();
   }
@@ -332,6 +369,7 @@ export async function rotateRefresh(
 
   const session = await issueSession(claims);
   await setRotationGrace(hash, session);
+  await setRefreshSuccessor(hash, session.refreshToken);
   await revokeRefreshMirror(hash);
   return session;
 }
