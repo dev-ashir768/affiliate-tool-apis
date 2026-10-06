@@ -26,6 +26,8 @@ import {
   revokeRefreshMirror,
   isRefreshMirrored,
   refreshTtl,
+  getRotationGrace,
+  setRotationGrace,
 } from "./refresh-store.js";
 import {
   cleanupExpiredInviteStub,
@@ -258,30 +260,80 @@ export async function login(input: { email: string; password: string }) {
   };
 }
 
-export async function rotateRefresh(
-  raw: string,
-  preferredOrgId?: string | null,
-) {
-  const hash = sha256(raw);
-  if (!(await isRefreshMirrored(hash))) {
-    throw new AppError("UNAUTHORIZED", "Invalid refresh token", 401);
-  }
-  const stored = await prisma.refreshToken.findUnique({
-    where: { tokenHash: hash },
+/** Revoke every live refresh token for a user (disable, password reset, …). */
+export async function revokeAllRefreshForUser(userId: string) {
+  const live = await prisma.refreshToken.findMany({
+    where: { userId, revokedAt: null },
+    select: { tokenHash: true },
   });
-  if (!stored || stored.revokedAt || stored.expiresAt < new Date()) {
-    throw new AppError("UNAUTHORIZED", "Invalid refresh token", 401);
-  }
-
-  const { claims } = await resolveAccessClaims(stored.userId, preferredOrgId);
-
-  await prisma.refreshToken.update({
-    where: { id: stored.id },
+  await prisma.refreshToken.updateMany({
+    where: { userId, revokedAt: null },
     data: { revokedAt: new Date() },
   });
-  await revokeRefreshMirror(hash);
+  await Promise.all(live.map((t) => revokeRefreshMirror(t.tokenHash)));
+}
 
-  return issueSession(claims);
+const invalidRefresh = () =>
+  new AppError("UNAUTHORIZED", "Invalid refresh token", 401);
+
+async function waitForRotationGrace(hash: string) {
+  // The concurrent winner claims the row before it stores the new pair.
+  for (let i = 0; i < 10; i++) {
+    const pair = await getRotationGrace(hash);
+    if (pair) return pair;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  return null;
+}
+
+/**
+ * Rotate a refresh token. `hint` comes from the caller's (possibly expired)
+ * access token and only steers which org the new session lands on.
+ */
+export async function rotateRefresh(
+  raw: string,
+  hint?: { sub: string; orgId: string | null } | null,
+) {
+  const hash = sha256(raw);
+
+  const graced = await getRotationGrace(hash);
+  if (graced) return graced;
+
+  if (!(await isRefreshMirrored(hash))) throw invalidRefresh();
+  const stored = await prisma.refreshToken.findUnique({
+    where: { tokenHash: hash },
+    include: { user: { select: { status: true } } },
+  });
+  if (!stored || stored.expiresAt < new Date()) throw invalidRefresh();
+  if (stored.revokedAt) {
+    const pair = await waitForRotationGrace(hash);
+    if (pair) return pair;
+    throw invalidRefresh();
+  }
+  if (stored.user.status === "DISABLED") {
+    await revokeAllRefreshForUser(stored.userId);
+    throw new AppError("FORBIDDEN", "Account is disabled", 403);
+  }
+
+  const preferredOrgId =
+    hint && hint.sub === stored.userId ? hint.orgId : undefined;
+  const { claims } = await resolveAccessClaims(stored.userId, preferredOrgId);
+
+  // Atomic claim — only one concurrent caller may mint the successor.
+  const claimed = await prisma.refreshToken.updateMany({
+    where: { id: stored.id, revokedAt: null },
+    data: { revokedAt: new Date() },
+  });
+  if (claimed.count === 0) {
+    const pair = await waitForRotationGrace(hash);
+    if (pair) return pair;
+    throw invalidRefresh();
+  }
+
+  const session = await issueSession(claims);
+  await setRotationGrace(hash, session);
+  await revokeRefreshMirror(hash);
+  return session;
 }
 
 export async function revokeRefresh(raw: string) {
@@ -421,23 +473,29 @@ export async function resetPassword(input: {
 
   const passwordHash = await hashPassword(input.password);
   await prisma.$transaction(async (tx) => {
+    // Single-use: a concurrent reset with the same token loses here.
+    const claimed = await tx.passwordResetToken.updateMany({
+      where: { id: row.id, usedAt: null },
+      data: { usedAt: new Date() },
+    });
+    if (claimed.count === 0) {
+      throw new AppError(
+        "VALIDATION_ERROR",
+        "Invalid or expired reset token",
+        400,
+      );
+    }
     await tx.user.update({
       where: { id: row.userId },
       data: { passwordHash },
-    });
-    await tx.passwordResetToken.update({
-      where: { id: row.id },
-      data: { usedAt: new Date() },
     });
     await tx.passwordResetToken.updateMany({
       where: { userId: row.userId, usedAt: null, id: { not: row.id } },
       data: { usedAt: new Date() },
     });
-    await tx.refreshToken.updateMany({
-      where: { userId: row.userId, revokedAt: null },
-      data: { revokedAt: new Date() },
-    });
   });
+  // Also drops the Redis mirror so revoked sessions cannot rotate.
+  await revokeAllRefreshForUser(row.userId);
 
   await writeAuditLog({
     actorUserId: row.userId,

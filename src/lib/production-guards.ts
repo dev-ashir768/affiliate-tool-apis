@@ -61,6 +61,12 @@ export function assertProductionBootConfig(): void {
     );
   }
 
+  if (!env.JWT_PRIVATE_KEY) {
+    logger.warn(
+      "JWT_PRIVATE_KEY unset in production — access tokens use HS256 and the portal must hold the signing secret. Configure the Ed25519 keypair.",
+    );
+  }
+
   if (!env.PORTAL_BFF_SECRET) {
     throw new Error(
       "PORTAL_BFF_SECRET is required in production so refresh tokens are not returned to arbitrary API clients.",

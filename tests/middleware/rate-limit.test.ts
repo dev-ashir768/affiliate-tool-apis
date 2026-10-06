@@ -90,3 +90,49 @@ describe("rateLimit middleware", () => {
     expect(next.mock.calls[0]?.[0]).toBeUndefined();
   });
 });
+
+describe("clientIp / tenant keys", () => {
+  it("trusts X-Client-IP only with the BFF secret", async () => {
+    const { clientIp } = await import("../../src/middleware/rate-limit.js");
+    const { env } = await import("../../src/config/env.js");
+    const base = { ip: "10.0.0.1", socket: { remoteAddress: "10.0.0.1" } };
+
+    const trusted = {
+      ...base,
+      headers: {
+        "x-portal-bff-secret": env.PORTAL_BFF_SECRET,
+        "x-client-ip": "203.0.113.7",
+      },
+    } as unknown as Request;
+    expect(clientIp(trusted)).toBe("203.0.113.7");
+
+    const spoofed = {
+      ...base,
+      headers: { "x-portal-bff-secret": "wrong", "x-client-ip": "203.0.113.7" },
+    } as unknown as Request;
+    expect(clientIp(spoofed)).toBe("10.0.0.1");
+
+    const garbage = {
+      ...base,
+      headers: {
+        "x-portal-bff-secret": env.PORTAL_BFF_SECRET,
+        "x-client-ip": "not an ip; drop",
+      },
+    } as unknown as Request;
+    expect(clientIp(garbage)).toBe("10.0.0.1");
+  });
+
+  it("keys tenant limits by org, then user", async () => {
+    const { rateLimitTenantKey, rateLimitEmailKey } = await import(
+      "../../src/middleware/rate-limit.js"
+    );
+    const withOrg = {
+      auth: { sub: "u1", orgId: "o1" },
+    } as unknown as Request;
+    expect(rateLimitTenantKey("x")(withOrg)).toBe("x:org:o1");
+    const userOnly = { auth: { sub: "u1", orgId: null } } as unknown as Request;
+    expect(rateLimitTenantKey("x")(userOnly)).toBe("x:user:u1");
+    const body = { body: { email: " A@B.com " } } as unknown as Request;
+    expect(rateLimitEmailKey("login")(body)).toBe("login:email:a@b.com");
+  });
+});

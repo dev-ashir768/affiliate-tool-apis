@@ -5,7 +5,7 @@ import { authenticate } from "../../middleware/authenticate.js";
 import { requirePaidAccess } from "../../middleware/require-paid-access.js";
 import { requireOrg } from "../../middleware/require-org.js";
 import { requireRole } from "../../middleware/require-role.js";
-import { rateLimit, rateLimitKey } from "../../middleware/rate-limit.js";
+import { rateLimit, rateLimitTenantKey } from "../../middleware/rate-limit.js";
 import {
   addListMemberSchema,
   bulkAddListMembersSchema,
@@ -51,7 +51,7 @@ creatorsRoutes.get("/", async (req, res, next) => {
 creatorsRoutes.post(
   "/",
   requireRole("OWNER", "ADMIN", "MEMBER"),
-  rateLimit({ key: rateLimitKey("creators-write"), windowSec: 60, limit: 60 }),
+  rateLimit({ key: rateLimitTenantKey("creators-write"), windowSec: 60, limit: 60 }),
   validateBody(createCreatorSchema),
   async (req, res, next) => {
     try {

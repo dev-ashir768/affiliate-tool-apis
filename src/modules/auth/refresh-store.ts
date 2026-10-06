@@ -1,6 +1,7 @@
 import { redis } from "../../lib/redis.js";
 import { env } from "../../config/env.js";
 import { logger } from "../../lib/logger.js";
+import { decryptVault, encryptVault } from "../../lib/crypto.js";
 
 /** In-process mirror used when Redis is unreachable (tests / brief outage). */
 const memory = new Map<string, number>();
@@ -140,6 +141,43 @@ export async function isRefreshMirrored(hash: string) {
   // Production: never accept in-memory mirror (multi-instance / revocation unsafe).
   if (env.NODE_ENV === "production") return false;
   return memoryAlive(hash);
+}
+
+/**
+ * Rotation grace: concurrent refreshes with the same token (parallel navigations /
+ * prefetches) receive the pair minted by the first winner instead of a 401.
+ * Stored encrypted — the value holds a live refresh token.
+ */
+export const ROTATION_GRACE_SEC = 30;
+const graceMemory = new Map<string, { value: string; exp: number }>();
+
+export type RotatedPair = { accessToken: string; refreshToken: string };
+
+export async function setRotationGrace(hash: string, pair: RotatedPair) {
+  const value = encryptVault(JSON.stringify(pair));
+  graceMemory.set(hash, { value, exp: Date.now() + ROTATION_GRACE_SEC * 1000 });
+  if (await ensureRedis()) {
+    await redis.set(`refresh-grace:${hash}`, value, "EX", ROTATION_GRACE_SEC);
+  }
+}
+
+export async function getRotationGrace(
+  hash: string,
+): Promise<RotatedPair | null> {
+  let value: string | null = null;
+  if (await ensureRedis()) {
+    value = await redis.get(`refresh-grace:${hash}`);
+  } else if (env.NODE_ENV !== "production") {
+    const entry = graceMemory.get(hash);
+    if (entry && entry.exp > Date.now()) value = entry.value;
+    else graceMemory.delete(hash);
+  }
+  if (!value) return null;
+  try {
+    return JSON.parse(decryptVault(value)) as RotatedPair;
+  } catch {
+    return null;
+  }
 }
 
 export function refreshTtl() {
