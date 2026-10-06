@@ -22,11 +22,11 @@ export function WelcomeEmail({
 }: Props) {
   return (
     <EmailLayout
-      preview="Welcome to Tiksly"
+      preview="Welcome to influxa"
       logoUrl={logoUrl}
       footerNote="Choose a plan to unlock shops, bots, and outreach."
     >
-      <EmailHeading>Welcome to Tiksly</EmailHeading>
+      <EmailHeading>Welcome to influxa</EmailHeading>
       <EmailParagraph>Hi {recipientName},</EmailParagraph>
       <EmailParagraph>
         Your workspace <strong>{organizationName}</strong> is ready. Pick a

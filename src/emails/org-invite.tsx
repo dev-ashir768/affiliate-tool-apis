@@ -24,7 +24,7 @@ export function OrgInviteEmail({
 }: Props) {
   return (
     <EmailLayout
-      preview={`Join ${organizationName} on Tiksly`}
+      preview={`Join ${organizationName} on influxa`}
       logoUrl={logoUrl}
       footerNote="If you weren’t expecting this invite, you can ignore this email."
     >
@@ -33,7 +33,7 @@ export function OrgInviteEmail({
         {inviterName
           ? `${inviterName} invited you to join `
           : "You’ve been invited to join "}
-        <strong>{organizationName}</strong> on Tiksly as{" "}
+        <strong>{organizationName}</strong> on influxa as{" "}
         <strong>{role}</strong>.
       </EmailParagraph>
       <EmailButton href={inviteUrl}>Accept invite</EmailButton>

@@ -2,6 +2,7 @@ import { Router } from "express";
 import type { CookieOptions, Request, Response } from "express";
 import { env } from "../../config/env.js";
 import { AppError } from "../../lib/errors.js";
+import { logger } from "../../lib/logger.js";
 import { validateBody } from "../../middleware/validate.js";
 import { authenticate } from "../../middleware/authenticate.js";
 import {
@@ -137,6 +138,7 @@ function rawRefreshFromRequest(req: {
   const fromCookie = req.cookies?.refresh_token;
   const raw = fromCookie || fromBody;
   if (!raw) {
+    logger.warn("refresh rejected", { reason: "missing_token" });
     throw new AppError("UNAUTHORIZED", "Missing refresh token", 401);
   }
   return raw;

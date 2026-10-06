@@ -24,7 +24,7 @@ export function StaffWelcomeEmail({
 }: Props) {
   return (
     <EmailLayout
-      preview="Your Tiksly backoffice access"
+      preview="Your influxa backoffice access"
       logoUrl={logoUrl}
       footerNote="Keep your credentials private. Contact a SUPERADMIN if you need help."
     >
@@ -32,7 +32,7 @@ export function StaffWelcomeEmail({
       <EmailParagraph>Hi {name},</EmailParagraph>
       <EmailParagraph>
         You’ve been added as platform staff with the role{" "}
-        <strong>{role}</strong>. Sign in to manage the Tiksly platform.
+        <strong>{role}</strong>. Sign in to manage the influxa platform.
       </EmailParagraph>
       {temporaryPassword ? (
         <>

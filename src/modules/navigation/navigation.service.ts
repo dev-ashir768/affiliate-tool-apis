@@ -33,8 +33,8 @@ export type NavResponse = {
 };
 
 const BRAND_BY_AREA: Record<NavAreaParam, NavBrand> = {
-  dashboard: { name: "Tiksly", href: "/home" },
-  backoffice: { name: "Tiksly Backoffice", href: "/backoffice/users" },
+  dashboard: { name: "influxa", href: "/home" },
+  backoffice: { name: "influxa Backoffice", href: "/backoffice/users" },
 };
 
 function toPrismaArea(area: NavAreaParam): NavArea {
