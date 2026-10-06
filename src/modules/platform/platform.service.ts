@@ -621,6 +621,8 @@ export async function billingOverview() {
   };
 }
 
+const AUDIT_SORTABLE = new Set(["createdAt", "action", "entityType"]);
+
 export async function listAuditLogs(params: ListParams) {
   const where: Prisma.AuditLogWhereInput = params.search
     ? {
@@ -628,9 +630,28 @@ export async function listAuditLogs(params: ListParams) {
           { action: { contains: params.search, mode: "insensitive" } },
           { entityType: { contains: params.search, mode: "insensitive" } },
           { entityId: { contains: params.search, mode: "insensitive" } },
+          {
+            actor: {
+              OR: [
+                { email: { contains: params.search, mode: "insensitive" } },
+                { name: { contains: params.search, mode: "insensitive" } },
+              ],
+            },
+          },
         ],
       }
     : {};
+
+  const sortBy =
+    params.sortBy && AUDIT_SORTABLE.has(params.sortBy)
+      ? params.sortBy
+      : "createdAt";
+  const sortOrder = params.sortOrder ?? "desc";
+  // Stable order within equal keys (e.g. same action) — newest first.
+  const orderBy: Prisma.AuditLogOrderByWithRelationInput[] =
+    sortBy === "createdAt"
+      ? [{ createdAt: sortOrder }]
+      : [{ [sortBy]: sortOrder }, { createdAt: "desc" }];
 
   const [total, rows] = await Promise.all([
     prisma.auditLog.count({ where }),
@@ -639,7 +660,7 @@ export async function listAuditLogs(params: ListParams) {
       include: {
         actor: { select: { id: true, email: true, name: true } },
       },
-      orderBy: { createdAt: "desc" },
+      orderBy,
       skip: (params.page - 1) * params.pageSize,
       take: params.pageSize,
     }),

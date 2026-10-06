@@ -56,7 +56,7 @@ export async function startTikTokShopOAuth(input: {
   if (!env.TIKTOK_SHOP_REDIRECT_URI) {
     throw new AppError(
       "FAILED_PRECONDITION",
-      "Set TIKTOK_SHOP_REDIRECT_URI to your portal callback (e.g. http://localhost:3000/shops/tiktok/callback)",
+      "Set TIKTOK_SHOP_REDIRECT_URI to your portal callback (e.g. " + env.TIKTOK_SHOP_REDIRECT_URI + ")",
       400,
     );
   }
