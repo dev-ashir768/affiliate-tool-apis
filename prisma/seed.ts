@@ -185,13 +185,16 @@ async function main() {
     })
     .catch(() => undefined);
 
-  for (let i = 1; i <= 5; i++) {
-    const email = `bot-s${i}@example.com`;
-    await prisma.botIdentity.upsert({
-      where: { email },
-      create: { email, status: "AVAILABLE" },
-      update: {},
-    });
+  // Placeholder bots can't receive TikTok invites; real ones are added in backoffice → Bots.
+  if (process.env.NODE_ENV !== "production") {
+    for (let i = 1; i <= 5; i++) {
+      const email = `bot-s${i}@example.com`;
+      await prisma.botIdentity.upsert({
+        where: { email },
+        create: { email, status: "AVAILABLE" },
+        update: {},
+      });
+    }
   }
 
   await seedNavSection(NavArea.DASHBOARD, "main", [
@@ -342,6 +345,14 @@ async function main() {
       label: "Shops",
       href: "/backoffice/shops",
       icon: "Store",
+      sortOrder: 2,
+      allowedPlatformRoles: [PlatformRole.SUPERADMIN, PlatformRole.OPS],
+    },
+    {
+      key: "bots",
+      label: "Bots",
+      href: "/backoffice/bots",
+      icon: "Bot",
       sortOrder: 2,
       allowedPlatformRoles: [PlatformRole.SUPERADMIN, PlatformRole.OPS],
     },

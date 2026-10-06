@@ -5,7 +5,10 @@ import { validateBody, validateQuery } from "../../middleware/validate.js";
 import { authenticate } from "../../middleware/authenticate.js";
 import { requirePlatform } from "../../middleware/require-platform.js";
 import {
+  createBotsSchema,
   createPlatformCreatorSchema,
+  listBotsQuerySchema,
+  patchBotSchema,
   createStaffSchema,
   grantAccessSchema,
   listQuerySchema,
@@ -32,6 +35,12 @@ import {
   listPlatformCreators,
   patchPlatformCreator,
 } from "./platform-creators.service.js";
+import {
+  createPlatformBots,
+  deletePlatformBot,
+  listPlatformBots,
+  setPlatformBotEnabled,
+} from "./platform-bots.service.js";
 import {
   createNavItemSchema,
   navAreaQuerySchema,
@@ -179,6 +188,75 @@ platformRoutes.get(
     try {
       const result = await listPlatformShops(req.query as any);
       res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+platformRoutes.get(
+  "/bots",
+  requirePlatform("SUPERADMIN", "OPS"),
+  validateQuery(listBotsQuerySchema),
+  async (req, res, next) => {
+    try {
+      res.json(await listPlatformBots(req.query as any));
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+platformRoutes.post(
+  "/bots",
+  requirePlatform("SUPERADMIN", "OPS"),
+  validateBody(createBotsSchema),
+  async (req, res, next) => {
+    try {
+      if (!req.auth?.sub) {
+        throw new AppError("UNAUTHORIZED", "Missing access token", 401);
+      }
+      res
+        .status(201)
+        .json(await createPlatformBots(req.body.emails, req.auth.sub));
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+platformRoutes.patch(
+  "/bots/:id",
+  requirePlatform("SUPERADMIN", "OPS"),
+  validateBody(patchBotSchema),
+  async (req, res, next) => {
+    try {
+      if (!req.auth?.sub) {
+        throw new AppError("UNAUTHORIZED", "Missing access token", 401);
+      }
+      res.json(
+        await setPlatformBotEnabled(
+          String(req.params.id),
+          req.body.enabled,
+          req.auth.sub,
+        ),
+      );
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+platformRoutes.delete(
+  "/bots/:id",
+  requirePlatform("SUPERADMIN", "OPS"),
+  async (req, res, next) => {
+    try {
+      if (!req.auth?.sub) {
+        throw new AppError("UNAUTHORIZED", "Missing access token", 401);
+      }
+      await deletePlatformBot(String(req.params.id), req.auth.sub);
+      res.status(204).end();
     } catch (err) {
       next(err);
     }
