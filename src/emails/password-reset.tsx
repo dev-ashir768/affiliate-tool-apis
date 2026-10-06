@@ -23,14 +23,14 @@ export function PasswordResetEmail({
   const greeting = recipientName ? `Hi ${recipientName},` : "Hi,";
   return (
     <EmailLayout
-      preview="Reset your Tiksly password"
+      preview="Reset your influxa password"
       logoUrl={logoUrl}
       footerNote="If you didn’t request a password reset, you can ignore this email."
     >
       <EmailHeading>Reset your password</EmailHeading>
       <EmailParagraph>{greeting}</EmailParagraph>
       <EmailParagraph>
-        We received a request to reset the password for your Tiksly account.
+        We received a request to reset the password for your influxa account.
         Click the button below to choose a new password.
       </EmailParagraph>
       <EmailButton href={resetUrl}>Reset password</EmailButton>

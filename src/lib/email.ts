@@ -174,7 +174,7 @@ export async function sendPasswordResetEmail(input: {
   const logoUrl = emailLogoUrl();
   await dispatch(
     input.to,
-    "Reset your Tiksly password",
+    "Reset your influxa password",
     `Reset your password: ${input.resetUrl}\n\nThis link expires in ${input.expiresMinutes} minutes.`,
     React.createElement(PasswordResetEmail, {
       logoUrl,
@@ -195,7 +195,7 @@ export async function sendOrgInviteEmail(input: {
   const logoUrl = emailLogoUrl();
   await dispatch(
     input.to,
-    `You're invited to ${input.organizationName} on Tiksly`,
+    `You're invited to ${input.organizationName} on influxa`,
     `You've been invited as ${input.role} to ${input.organizationName}.\n\nAccept: ${input.inviteUrl}`,
     React.createElement(OrgInviteEmail, {
       logoUrl,
@@ -225,7 +225,7 @@ export async function sendStaffWelcomeEmail(input: {
   }
   await dispatch(
     input.to,
-    "Your Tiksly backoffice access",
+    "Your influxa backoffice access",
     textLines.join("\n\n"),
     React.createElement(StaffWelcomeEmail, {
       logoUrl,
@@ -246,7 +246,7 @@ export async function sendWelcomeEmail(input: {
   const logoUrl = emailLogoUrl();
   await dispatch(
     input.to,
-    "Welcome to Tiksly — choose a plan to get started",
+    "Welcome to influxa — choose a plan to get started",
     `Hi ${input.recipientName},\n\nYour workspace ${input.organizationName} is ready.\n\nChoose a plan: ${homeUrl}`,
     React.createElement(WelcomeEmail, {
       logoUrl,
@@ -324,7 +324,7 @@ function billingEmailCopy(input: {
     case "SUBSCRIBED":
       return {
         subject: `You're subscribed on ${input.organizationName}`,
-        preview: "Your Tiksly subscription is active",
+        preview: "Your influxa subscription is active",
         title: "Subscription started",
         paragraphs: [
           `Thanks for subscribing on ${input.organizationName}. Your product access is unlocked.`,
@@ -338,7 +338,7 @@ function billingEmailCopy(input: {
     case "RENEWED":
       return {
         subject: `Subscription renewed — ${input.organizationName}`,
-        preview: "Your Tiksly subscription renewed",
+        preview: "Your influxa subscription renewed",
         title: "Subscription renewed",
         paragraphs: [
           `Your subscription for ${input.organizationName} renewed successfully.`,
@@ -352,7 +352,7 @@ function billingEmailCopy(input: {
     case "UPGRADED":
       return {
         subject: `Plan upgraded — ${planLabel(input.fromPlanCode)} → ${planLabel(input.toPlanCode)}`,
-        preview: "Your Tiksly plan was upgraded",
+        preview: "Your influxa plan was upgraded",
         title: "Plan upgraded",
         paragraphs: [
           `Your plan on ${input.organizationName} was upgraded. New limits apply immediately.`,
@@ -365,7 +365,7 @@ function billingEmailCopy(input: {
     case "DOWNGRADED":
       return {
         subject: `Plan changed — ${planLabel(input.fromPlanCode)} → ${planLabel(input.toPlanCode)}`,
-        preview: "Your Tiksly plan was changed",
+        preview: "Your influxa plan was changed",
         title: "Plan changed",
         paragraphs: [
           `Your plan on ${input.organizationName} was changed. Limits now match your new plan.`,
@@ -378,7 +378,7 @@ function billingEmailCopy(input: {
     case "CANCELED":
       return {
         subject: `Subscription canceled — ${input.organizationName}`,
-        preview: "Your Tiksly subscription was canceled",
+        preview: "Your influxa subscription was canceled",
         title: "Subscription canceled",
         paragraphs: [
           `The subscription for ${input.organizationName} was canceled. Product features stay locked until you renew.`,
@@ -411,7 +411,7 @@ function billingEmailCopy(input: {
     case "REGISTERED":
     default:
       return {
-        subject: `Welcome to Tiksly — ${input.organizationName}`,
+        subject: `Welcome to influxa — ${input.organizationName}`,
         preview: "Your workspace is ready",
         title: "Welcome",
         paragraphs: [

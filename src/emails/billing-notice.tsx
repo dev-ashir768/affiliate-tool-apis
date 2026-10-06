@@ -36,7 +36,7 @@ export function BillingNoticeEmail({
       logoUrl={logoUrl}
       footerNote={
         footerNote ??
-        "You’re receiving this because of billing activity on your Tiksly organization."
+        "You’re receiving this because of billing activity on your influxa organization."
       }
     >
       <EmailHeading>{title}</EmailHeading>

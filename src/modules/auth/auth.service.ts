@@ -339,15 +339,50 @@ export async function rotateRefresh(
     where: { tokenHash: hash },
     include: { user: { select: { status: true } } },
   });
-  if (!stored || stored.expiresAt < new Date()) throw invalidRefresh();
+  // Short hash prefix only — enough to correlate, never the token itself.
+  const tokenRef = hash.slice(0, 8);
+  if (!stored) {
+    logger.warn("refresh rejected", { reason: "not_found", tokenRef });
+    throw invalidRefresh();
+  }
+  if (stored.expiresAt < new Date()) {
+    logger.warn("refresh rejected", {
+      reason: "expired",
+      tokenRef,
+      userId: stored.userId,
+      expiredAt: stored.expiresAt.toISOString(),
+    });
+    throw invalidRefresh();
+  }
   if (stored.revokedAt) {
     const pair =
       (await waitForRotationGrace(hash)) ??
       (await recoverFromSuccessor(hash, hint));
-    if (pair) return pair;
+    if (pair) {
+      logger.info("refresh recovered after lost rotation", {
+        tokenRef,
+        userId: stored.userId,
+      });
+      return pair;
+    }
+    logger.warn("refresh rejected", {
+      // Revoked with no live successor: logout, password reset, staff
+      // change, or an old token whose successor was already used.
+      reason: "revoked",
+      tokenRef,
+      userId: stored.userId,
+      revokedSecondsAgo: Math.round(
+        (Date.now() - stored.revokedAt.getTime()) / 1000,
+      ),
+    });
     throw invalidRefresh();
   }
   if (stored.user.status === "DISABLED") {
+    logger.warn("refresh rejected", {
+      reason: "user_disabled",
+      tokenRef,
+      userId: stored.userId,
+    });
     await revokeAllRefreshForUser(stored.userId);
     throw new AppError("FORBIDDEN", "Account is disabled", 403);
   }
@@ -364,6 +399,11 @@ export async function rotateRefresh(
   if (claimed.count === 0) {
     const pair = await waitForRotationGrace(hash);
     if (pair) return pair;
+    logger.warn("refresh rejected", {
+      reason: "concurrent_claim_lost",
+      tokenRef,
+      userId: stored.userId,
+    });
     throw invalidRefresh();
   }
 
