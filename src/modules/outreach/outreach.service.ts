@@ -85,8 +85,19 @@ function toMessage(row: {
   };
 }
 
+/**
+ * Merchant-facing: whether email can be sent (and whether it is real
+ * delivery). Provider name, missing settings and notes stay server-side.
+ */
 export function getOutreachEmailStatus() {
-  return getEmailDeliveryStatus();
+  const status = getEmailDeliveryStatus();
+  if (!status.ready) {
+    logger.warn("outreach email not ready", {
+      provider: status.provider,
+      missing: status.missing,
+    });
+  }
+  return { ready: status.ready, live: status.live };
 }
 
 export async function listTemplates(organizationId: string) {

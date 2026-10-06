@@ -34,10 +34,14 @@ type OAuthStatePayload = {
 
 function appCredentials() {
   if (!env.TIKTOK_SHOP_APP_KEY || !env.TIKTOK_SHOP_APP_SECRET) {
+    // Operator detail goes to logs; the API response reaches merchants.
+    logger.error("tiktok app not configured", {
+      missing: ["TIKTOK_SHOP_APP_KEY", "TIKTOK_SHOP_APP_SECRET"],
+    });
     throw new AppError(
       "FAILED_PRECONDITION",
-      "TikTok app not configured: set TIKTOK_SHOP_APP_KEY and TIKTOK_SHOP_APP_SECRET",
-      400,
+      "TikTok Shop connection isn't available right now. Please contact support.",
+      503,
     );
   }
   return {

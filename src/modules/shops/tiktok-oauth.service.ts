@@ -1,3 +1,4 @@
+import { logger } from "../../lib/logger.js";
 import type { ShopRegion } from "@prisma/client";
 import { prisma } from "../../lib/prisma.js";
 import { AppError } from "../../lib/errors.js";
@@ -46,18 +47,17 @@ export async function startTikTokShopOAuth(input: {
   region: ShopRegion;
   shopId?: string | null;
 }) {
-  if (!oauthAppConfigured()) {
+  if (!oauthAppConfigured() || !env.TIKTOK_SHOP_REDIRECT_URI) {
+    // Operator detail goes to logs; the API response reaches merchants.
+    logger.error("tiktok oauth not configured", {
+      appKeySet: Boolean(env.TIKTOK_SHOP_APP_KEY),
+      appSecretSet: Boolean(env.TIKTOK_SHOP_APP_SECRET),
+      redirectUriSet: Boolean(env.TIKTOK_SHOP_REDIRECT_URI),
+    });
     throw new AppError(
       "FAILED_PRECONDITION",
-      "Set TIKTOK_SHOP_APP_KEY and TIKTOK_SHOP_APP_SECRET in API env",
-      400,
-    );
-  }
-  if (!env.TIKTOK_SHOP_REDIRECT_URI) {
-    throw new AppError(
-      "FAILED_PRECONDITION",
-      "Set TIKTOK_SHOP_REDIRECT_URI to your portal callback (e.g. " + env.TIKTOK_SHOP_REDIRECT_URI + ")",
-      400,
+      "TikTok Shop connection isn't available right now. Please contact support.",
+      503,
     );
   }
 
@@ -285,13 +285,12 @@ export async function getShopOpenApiCredentials(
   };
 }
 
+/**
+ * Merchant-facing: only whether shop authorization is available. Never
+ * expose the app key / service id, redirect URI or which settings are set.
+ */
 export function getTikTokOAuthStatus() {
   return {
-    appKeySet: Boolean(env.TIKTOK_SHOP_APP_KEY),
-    appSecretSet: Boolean(env.TIKTOK_SHOP_APP_SECRET),
-    redirectUriSet: Boolean(env.TIKTOK_SHOP_REDIRECT_URI),
-    serviceId: env.TIKTOK_SHOP_SERVICE_ID || env.TIKTOK_SHOP_APP_KEY || null,
     configured: oauthAppConfigured() && Boolean(env.TIKTOK_SHOP_REDIRECT_URI),
-    redirectUri: env.TIKTOK_SHOP_REDIRECT_URI ?? null,
   };
 }

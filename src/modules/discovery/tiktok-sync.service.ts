@@ -600,7 +600,8 @@ export async function getOrgDiscoveryTikTokStatus(organizationId: string) {
   });
 
   return {
-    config,
+    // Merchant-facing: availability only, no env names / keys / note.
+    config: { appConfigured: config.appConfigured },
     shops: shops.map((s) => ({
       id: s.id,
       displayName: s.displayName,
