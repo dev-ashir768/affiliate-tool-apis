@@ -180,6 +180,44 @@ export async function getRotationGrace(
   }
 }
 
+/**
+ * Successor link: old refresh hash → the raw token that replaced it. If the
+ * response carrying the new cookie never reached the browser (aborted fetch,
+ * cancelled prefetch, closed tab), the browser retries with the old token; we
+ * hand back the successor as long as the successor itself is still unused.
+ */
+export async function setRefreshSuccessor(oldHash: string, successorRaw: string) {
+  if (await ensureRedis()) {
+    await redis.set(
+      `refresh-successor:${oldHash}`,
+      encryptVault(successorRaw),
+      "EX",
+      refreshTtl(),
+    );
+  } else if (env.NODE_ENV !== "production") {
+    graceMemory.set(`successor:${oldHash}`, {
+      value: encryptVault(successorRaw),
+      exp: Date.now() + refreshTtl() * 1000,
+    });
+  }
+}
+
+export async function getRefreshSuccessor(oldHash: string): Promise<string | null> {
+  let value: string | null = null;
+  if (await ensureRedis()) {
+    value = await redis.get(`refresh-successor:${oldHash}`);
+  } else if (env.NODE_ENV !== "production") {
+    const entry = graceMemory.get(`successor:${oldHash}`);
+    if (entry && entry.exp > Date.now()) value = entry.value;
+  }
+  if (!value) return null;
+  try {
+    return decryptVault(value);
+  } catch {
+    return null;
+  }
+}
+
 export function refreshTtl() {
   return env.REFRESH_TOKEN_TTL_SEC;
 }

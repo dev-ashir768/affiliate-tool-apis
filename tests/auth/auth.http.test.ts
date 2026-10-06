@@ -4,6 +4,7 @@ import { createApp } from "../../src/app.js";
 import { prisma } from "../../src/lib/prisma.js";
 import { redis } from "../../src/lib/redis.js";
 import { env } from "../../src/config/env.js";
+import { sha256 } from "../../src/lib/crypto.js";
 
 function cookieHeaderFromSetCookie(
   setCookie: string | string[] | undefined
@@ -97,6 +98,37 @@ describe("auth HTTP", () => {
     const successors = new Set(burst.map((r) => r.body.refreshToken));
     expect(successors.size).toBe(1);
     expect(successors.has(current)).toBe(false);
+
+    // Lost response: the browser never stored the successor and retries with
+    // the old token after the 30s grace. It must get the same successor back
+    // while that successor is unused — and stop working once it is used.
+    const lostOld = [...successors][0] as string;
+    const rotated = await request(app)
+      .post("/api/v1/auth/refresh")
+      .set(bffHeaders())
+      .send({ refreshToken: lostOld });
+    expect(rotated.status).toBe(200);
+    const successor = rotated.body.refreshToken as string;
+    await redis.del(`refresh-grace:${sha256(lostOld)}`);
+
+    const recovered = await request(app)
+      .post("/api/v1/auth/refresh")
+      .set(bffHeaders())
+      .send({ refreshToken: lostOld });
+    expect(recovered.status).toBe(200);
+    expect(recovered.body.refreshToken).toBe(successor);
+
+    const used = await request(app)
+      .post("/api/v1/auth/refresh")
+      .set(bffHeaders())
+      .send({ refreshToken: successor });
+    expect(used.status).toBe(200);
+    await redis.del(`refresh-grace:${sha256(lostOld)}`);
+    const stale = await request(app)
+      .post("/api/v1/auth/refresh")
+      .set(bffHeaders())
+      .send({ refreshToken: lostOld });
+    expect(stale.status).toBe(401);
   }, 60000);
 
   it("omits refreshToken JSON without BFF secret when secret is configured", async () => {
