@@ -36,10 +36,14 @@ export function assertShopVerifySafeForEnv(): void {
       503,
     );
   }
-  if (!env.SHOP_VERIFY_LIVE_URL_US && !env.SHOP_VERIFY_LIVE_URL_UK) {
+  if (
+    env.BOT_INBOX_PROVIDER !== "imap" &&
+    !env.SHOP_VERIFY_LIVE_URL_US &&
+    !env.SHOP_VERIFY_LIVE_URL_UK
+  ) {
     throw new AppError(
       "FAILED_PRECONDITION",
-      "Production shop verify requires SHOP_VERIFY_LIVE_URL_US and/or SHOP_VERIFY_LIVE_URL_UK.",
+      "Production shop verify needs invite links: set BOT_INBOX_PROVIDER=imap, or SHOP_VERIFY_LIVE_URL_US / SHOP_VERIFY_LIVE_URL_UK.",
       503,
     );
   }

@@ -30,6 +30,7 @@ function toPlatformBot(row: BotRow) {
     email: row.email,
     status: row.status,
     reservedAt: row.reservedAt,
+    sessionCapturedAt: row.sessionCapturedAt,
     createdAt: row.createdAt,
     shop: row.shop
       ? {

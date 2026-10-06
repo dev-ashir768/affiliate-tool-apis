@@ -12,6 +12,9 @@ describe("assertShopVerifySafeForEnv", () => {
     SHOP_VERIFY_MODE: env.SHOP_VERIFY_MODE,
     PLAYWRIGHT_SHOP_VERIFY_DRY_RUN: env.PLAYWRIGHT_SHOP_VERIFY_DRY_RUN,
     SHOP_VERIFY_TARGET: env.SHOP_VERIFY_TARGET,
+    BOT_INBOX_PROVIDER: env.BOT_INBOX_PROVIDER,
+    SHOP_VERIFY_LIVE_URL_US: env.SHOP_VERIFY_LIVE_URL_US,
+    SHOP_VERIFY_LIVE_URL_UK: env.SHOP_VERIFY_LIVE_URL_UK,
   };
 
   afterEach(() => {
@@ -22,6 +25,32 @@ describe("assertShopVerifySafeForEnv", () => {
       original.PLAYWRIGHT_SHOP_VERIFY_DRY_RUN;
     (env as { SHOP_VERIFY_TARGET: string }).SHOP_VERIFY_TARGET =
       original.SHOP_VERIFY_TARGET;
+    (env as { BOT_INBOX_PROVIDER: string }).BOT_INBOX_PROVIDER =
+      original.BOT_INBOX_PROVIDER;
+    (env as { SHOP_VERIFY_LIVE_URL_US?: string }).SHOP_VERIFY_LIVE_URL_US =
+      original.SHOP_VERIFY_LIVE_URL_US;
+    (env as { SHOP_VERIFY_LIVE_URL_UK?: string }).SHOP_VERIFY_LIVE_URL_UK =
+      original.SHOP_VERIFY_LIVE_URL_UK;
+  });
+
+  function liveProduction(inbox: string) {
+    (env as { NODE_ENV: string }).NODE_ENV = "production";
+    (env as { SHOP_VERIFY_MODE: string }).SHOP_VERIFY_MODE = "playwright";
+    (env as { PLAYWRIGHT_SHOP_VERIFY_DRY_RUN: boolean }).PLAYWRIGHT_SHOP_VERIFY_DRY_RUN = false;
+    (env as { SHOP_VERIFY_TARGET: string }).SHOP_VERIFY_TARGET = "live";
+    (env as { BOT_INBOX_PROVIDER: string }).BOT_INBOX_PROVIDER = inbox;
+    (env as { SHOP_VERIFY_LIVE_URL_US?: string }).SHOP_VERIFY_LIVE_URL_US = undefined;
+    (env as { SHOP_VERIFY_LIVE_URL_UK?: string }).SHOP_VERIFY_LIVE_URL_UK = undefined;
+  }
+
+  it("allows live verify in production when invite links come from IMAP", () => {
+    liveProduction("imap");
+    expect(() => assertShopVerifySafeForEnv()).not.toThrow();
+  });
+
+  it("refuses live verify with no IMAP and no fallback URL", () => {
+    liveProduction("none");
+    expect(() => assertShopVerifySafeForEnv()).toThrow(/BOT_INBOX_PROVIDER=imap/);
   });
 
   it("no-ops outside production", () => {

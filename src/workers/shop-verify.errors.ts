@@ -5,7 +5,10 @@ export type ShopVerifyReasonCode =
   | "PLAYWRIGHT_MISSING"
   | "LIVE_NOT_CONFIGURED"
   | "INBOX_TIMEOUT"
-  | "INBOX_MISCONFIGURED";
+  | "INBOX_MISCONFIGURED"
+  | "BOT_SESSION_MISSING"
+  | "BOT_SESSION_EXPIRED"
+  | "INVITE_ACCEPT_NOT_FOUND";
 
 const MESSAGES: Record<ShopVerifyReasonCode, string> = {
   INVITE_REJECTED: "Invite was rejected on the verify page",
@@ -18,6 +21,12 @@ const MESSAGES: Record<ShopVerifyReasonCode, string> = {
   INBOX_TIMEOUT: "Timed out waiting for invite email in bot inbox",
   INBOX_MISCONFIGURED:
     "Bot inbox IMAP is not configured; set IMAP_HOST/USER/PASS or BOT_INBOX_PROVIDER=none",
+  BOT_SESSION_MISSING:
+    "Bot has no saved TikTok session. Staff must run npm run bot:login for this bot.",
+  BOT_SESSION_EXPIRED:
+    "Bot's TikTok session expired. Staff must run npm run bot:login for this bot again.",
+  INVITE_ACCEPT_NOT_FOUND:
+    "Could not find the accept button on the TikTok invite page. Check the invite is still pending.",
 };
 
 export class ShopVerifyTerminalError extends Error {
