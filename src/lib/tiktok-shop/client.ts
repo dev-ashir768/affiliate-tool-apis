@@ -181,7 +181,8 @@ export function getTikTokShopConfigStatus(): TikTokShopConfigStatus {
       ? envCreds
         ? "App ready. Env fallback tokens set; prefer syncing with a shop that completed TikTok OAuth."
         : "App ready. Connect a shop via TikTok OAuth, then sync discovery with that shopId."
-      : "Set TIKTOK_SHOP_APP_KEY + TIKTOK_SHOP_APP_SECRET, then authorize a merchant shop.",
+      : // Shown to merchants — no env/config names here.
+        "TikTok Shop integration isn't enabled yet. Please contact support.",
   };
 }
 
