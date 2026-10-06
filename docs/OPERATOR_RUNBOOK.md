@@ -83,3 +83,32 @@ npm run db:status
 - [ ] Shop verify: `SHOP_VERIFY_MODE=playwright`, dry-run off, `SHOP_VERIFY_TARGET=live`
 - [ ] Optional `SENTRY_DSN` when error tracking wired
 - [ ] Rate limits: auth fail-closed when Redis down
+
+## Auth keys, BFF secret and client IP
+
+- **Access JWTs (EdDSA):** set `JWT_PRIVATE_KEY` + `JWT_PUBLIC_KEY` on the API and
+  only `JWT_PUBLIC_KEY` on the portal (generator command in `.env.example`).
+  Verify with `npm run check:jwt`. Without the keypair the API falls back to HS256
+  and the portal needs `JWT_ACCESS_SECRET`.
+- **Rollout order:** deploy the API with the keypair first, then the portal with
+  `JWT_PUBLIC_KEY`. Old HS256 access tokens are rejected and silently re-issued
+  via the refresh cookie; nobody is logged out.
+- **`PORTAL_BFF_SECRET`:** identical on both apps. Rotating it = update both and
+  restart both together.
+- **Client IP:** the portal forwards the browser IP to the API (`X-Client-IP`,
+  trusted only with the BFF secret) for rate limiting. nginx in front of the
+  portal must set it:
+
+  ```nginx
+  proxy_set_header X-Real-IP $remote_addr;
+  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+  ```
+- **Graceful restarts:** API and worker drain on SIGTERM; PM2 `kill_timeout` is
+  35s so in-flight jobs finish instead of being re-run as stalled.
+
+## Tests
+
+Tests never use `DATABASE_URL` from `.env`. Point `TEST_DATABASE_URL` /
+`TEST_REDIS_URL` at disposable instances (defaults: local
+`affiliate_tool_test` and Redis db 15), then `npx prisma migrate deploy`,
+`npx prisma db seed`, `npm test`.

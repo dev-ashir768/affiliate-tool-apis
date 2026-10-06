@@ -6,7 +6,7 @@ import { authenticate } from "../../middleware/authenticate.js";
 import { requireOrg } from "../../middleware/require-org.js";
 import { requireRole } from "../../middleware/require-role.js";
 import { requirePaidAccess } from "../../middleware/require-paid-access.js";
-import { rateLimit, rateLimitKey } from "../../middleware/rate-limit.js";
+import { rateLimit, rateLimitTenantKey } from "../../middleware/rate-limit.js";
 import { connectShopSchema } from "./shops.schemas.js";
 import {
   connectShop,
@@ -68,7 +68,7 @@ shopsRoutes.post(
   requireOrg,
   requireRole("OWNER", "ADMIN"),
   rateLimit({
-    key: rateLimitKey("tiktok-oauth-start"),
+    key: rateLimitTenantKey("tiktok-oauth-start"),
     windowSec: 60,
     limit: 10,
   }),
@@ -97,20 +97,22 @@ shopsRoutes.post(
   requireOrg,
   requireRole("OWNER", "ADMIN"),
   rateLimit({
-    key: rateLimitKey("tiktok-oauth-complete"),
+    key: rateLimitTenantKey("tiktok-oauth-complete"),
     windowSec: 60,
     limit: 20,
   }),
   validateBody(oauthCompleteSchema),
   async (req, res, next) => {
     try {
+      if (!req.auth?.orgId || !req.auth.sub) {
+        throw new AppError("UNAUTHORIZED", "Missing access token", 401);
+      }
       const shop = await completeTikTokShopOAuth({
         code: req.body.code,
         state: req.body.state,
+        organizationId: req.auth.orgId,
+        userId: req.auth.sub,
       });
-      if (shop.organizationId !== req.auth?.orgId) {
-        throw new AppError("FORBIDDEN", "OAuth shop org mismatch", 403);
-      }
       res.json(shop);
     } catch (err) {
       next(err);
@@ -184,7 +186,7 @@ shopsRoutes.get(
 shopsRoutes.post(
   "/:id/verify",
   rateLimit({
-    key: rateLimitKey("shop-verify"),
+    key: rateLimitTenantKey("shop-verify"),
     limit: 10,
     windowSec: 60,
   }),

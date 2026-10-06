@@ -113,8 +113,18 @@ export async function startTikTokShopOAuth(input: {
 export async function completeTikTokShopOAuth(input: {
   code: string;
   state: string;
+  /** Caller's session — must match the state before any token exchange. */
+  organizationId: string;
+  userId: string;
 }) {
   const parsed = verifyOAuthState(input.state);
+  if (parsed.orgId !== input.organizationId || parsed.userId !== input.userId) {
+    throw new AppError(
+      "FORBIDDEN",
+      "OAuth state belongs to a different session",
+      403,
+    );
+  }
   const shop = await prisma.shop.findFirst({
     where: { id: parsed.shopId, organizationId: parsed.orgId },
   });

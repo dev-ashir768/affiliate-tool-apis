@@ -9,6 +9,7 @@ import { hashPassword } from "../../lib/password.js";
 import { writeAuditLog } from "../../lib/audit.js";
 import { sendStaffWelcomeEmail } from "../../lib/email.js";
 import { logger } from "../../lib/logger.js";
+import { revokeAllRefreshForUser } from "../auth/auth.service.js";
 import {
   isManualSubscriptionId,
   subscriptionGrantsAccess,
@@ -221,6 +222,13 @@ export async function patchStaff(
     },
     include: { user: true },
   });
+  // Role/status change must not survive in existing sessions.
+  if (
+    (input.status && input.status !== membership.status) ||
+    (input.role && input.role !== membership.role)
+  ) {
+    await revokeAllRefreshForUser(membership.userId);
+  }
   await writeAuditLog({
     actorUserId: actorUserId,
     action: "platform.staff_patched",

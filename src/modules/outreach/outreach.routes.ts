@@ -5,7 +5,7 @@ import { authenticate } from "../../middleware/authenticate.js";
 import { requirePaidAccess } from "../../middleware/require-paid-access.js";
 import { requireOrg } from "../../middleware/require-org.js";
 import { requireRole } from "../../middleware/require-role.js";
-import { rateLimit, rateLimitKey } from "../../middleware/rate-limit.js";
+import { rateLimit, rateLimitTenantKey } from "../../middleware/rate-limit.js";
 import {
   bulkSendOutreachSchema,
   createTemplateSchema,
@@ -87,7 +87,7 @@ outreachRoutes.get("/messages", async (req, res, next) => {
 outreachRoutes.post(
   "/send",
   requireRole("OWNER", "ADMIN"),
-  rateLimit({ key: rateLimitKey("outreach-send"), windowSec: 60, limit: 30 }),
+  rateLimit({ key: rateLimitTenantKey("outreach-send"), windowSec: 60, limit: 30 }),
   validateBody(sendOutreachSchema),
   async (req, res, next) => {
     try {
@@ -103,7 +103,7 @@ outreachRoutes.post(
   "/send-bulk",
   requireRole("OWNER", "ADMIN"),
   rateLimit({
-    key: rateLimitKey("outreach-bulk"),
+    key: rateLimitTenantKey("outreach-bulk"),
     windowSec: 60,
     limit: 10,
   }),

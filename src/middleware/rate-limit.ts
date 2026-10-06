@@ -1,4 +1,5 @@
-import { randomBytes } from "node:crypto";
+import { randomBytes, timingSafeEqual } from "node:crypto";
+import { env } from "../config/env.js";
 import type { Request, RequestHandler } from "express";
 import { AppError } from "../lib/errors.js";
 import { redis } from "../lib/redis.js";
@@ -124,8 +125,38 @@ function markDegraded(err: unknown) {
   });
 }
 
-function clientKey(req: Request): string {
+function headerValue(req: Request, name: string): string | undefined {
+  const raw = req.headers?.[name];
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  return typeof value === "string" ? value.trim() : undefined;
+}
+
+/** True when the request carries the portal BFF shared secret. */
+export function isTrustedBff(req: Request): boolean {
+  const configured = env.PORTAL_BFF_SECRET;
+  const sent = headerValue(req, "x-portal-bff-secret");
+  if (!configured || !sent) return false;
+  const a = Buffer.from(sent);
+  const b = Buffer.from(configured);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+const IP_LIKE = /^[0-9a-fA-F:.]{2,45}$/;
+
+/**
+ * End-user IP. Every portal call arrives from the portal server, so the BFF
+ * forwards the browser IP in X-Client-IP — trusted only with the BFF secret.
+ */
+export function clientIp(req: Request): string {
+  if (isTrustedBff(req)) {
+    const forwarded = headerValue(req, "x-client-ip");
+    if (forwarded && IP_LIKE.test(forwarded)) return forwarded;
+  }
   return req.ip || req.socket.remoteAddress || "unknown";
+}
+
+function clientKey(req: Request): string {
+  return clientIp(req);
 }
 
 /**
@@ -213,4 +244,23 @@ export function rateLimit({
 /** Default IP-based key helpers for route wiring. */
 export function rateLimitKey(prefix: string) {
   return (req: Request) => `${prefix}:${clientKey(req)}`;
+}
+
+/** Per-account key (body.email) — run after express.json / validateBody. */
+export function rateLimitEmailKey(prefix: string) {
+  return (req: Request) => {
+    const email = (req.body as { email?: unknown } | undefined)?.email;
+    const normalized =
+      typeof email === "string" ? email.toLowerCase().trim() : "none";
+    return `${prefix}:email:${normalized}`;
+  };
+}
+
+/** Per-tenant key for authenticated routes: org → user → client IP. */
+export function rateLimitTenantKey(prefix: string) {
+  return (req: Request) => {
+    if (req.auth?.orgId) return `${prefix}:org:${req.auth.orgId}`;
+    if (req.auth?.sub) return `${prefix}:user:${req.auth.sub}`;
+    return `${prefix}:${clientKey(req)}`;
+  };
 }

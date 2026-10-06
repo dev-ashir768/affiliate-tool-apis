@@ -5,7 +5,7 @@ import { authenticate } from "../../middleware/authenticate.js";
 import { requirePaidAccess } from "../../middleware/require-paid-access.js";
 import { requireOrg } from "../../middleware/require-org.js";
 import { requireRole } from "../../middleware/require-role.js";
-import { rateLimit, rateLimitKey } from "../../middleware/rate-limit.js";
+import { rateLimit, rateLimitTenantKey } from "../../middleware/rate-limit.js";
 import {
   createConversationSchema,
   markReadSchema,
@@ -70,7 +70,7 @@ messagesRoutes.post(
   "/conversations",
   requireRole("OWNER", "ADMIN"),
   rateLimit({
-    key: rateLimitKey("messages-open"),
+    key: rateLimitTenantKey("messages-open"),
     windowSec: 60,
     limit: 30,
   }),
@@ -128,7 +128,7 @@ messagesRoutes.post(
   "/conversations/:id/messages",
   requireRole("OWNER", "ADMIN"),
   rateLimit({
-    key: rateLimitKey("messages-send"),
+    key: rateLimitTenantKey("messages-send"),
     windowSec: 60,
     limit: 60,
   }),

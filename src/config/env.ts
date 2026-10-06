@@ -9,6 +9,19 @@ const schema = z.object({
   REDIS_URL: z.string().min(1),
   JWT_ACCESS_SECRET: z.string().min(32),
   /**
+   * Ed25519 PEM keypair for access JWTs (EdDSA). When both are set the API signs
+   * with the private key and the portal only needs JWT_PUBLIC_KEY. "\n" escapes allowed.
+   * Unset → HS256 with JWT_ACCESS_SECRET (dev / tests).
+   */
+  JWT_PRIVATE_KEY: z.preprocess(
+    (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+    z.string().min(1).optional(),
+  ),
+  JWT_PUBLIC_KEY: z.preprocess(
+    (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+    z.string().min(1).optional(),
+  ),
+  /**
    * AES-256 vault key. Preferred: 64 hex chars (32 bytes).
    * Legacy: any string ≥32 chars (first 32 UTF-8 bytes / sha256 fallback in crypto.ts).
    */
@@ -192,4 +205,9 @@ const schema = z.object({
 
 export type Env = z.infer<typeof schema>;
 
-export const env: Env = schema.parse(process.env);
+export const env: Env = schema
+  .refine((e) => Boolean(e.JWT_PRIVATE_KEY) === Boolean(e.JWT_PUBLIC_KEY), {
+    message: "Set both JWT_PRIVATE_KEY and JWT_PUBLIC_KEY, or neither.",
+    path: ["JWT_PUBLIC_KEY"],
+  })
+  .parse(process.env);

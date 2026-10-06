@@ -81,6 +81,22 @@ describe("auth HTTP", () => {
     expect(refreshRes.body.accessToken).toBeTruthy();
     expect(refreshRes.body.refreshToken).toBeTruthy();
     expect(refreshRes.body.refreshToken).not.toBe(refreshToken);
+
+    // Parallel navigations refresh with the same token at once: all must
+    // succeed and converge on one successor instead of logging the user out.
+    const current = refreshRes.body.refreshToken as string;
+    const burst = await Promise.all(
+      [0, 1, 2].map(() =>
+        request(app)
+          .post("/api/v1/auth/refresh")
+          .set(bffHeaders())
+          .send({ refreshToken: current }),
+      ),
+    );
+    for (const r of burst) expect(r.status).toBe(200);
+    const successors = new Set(burst.map((r) => r.body.refreshToken));
+    expect(successors.size).toBe(1);
+    expect(successors.has(current)).toBe(false);
   }, 60000);
 
   it("omits refreshToken JSON without BFF secret when secret is configured", async () => {

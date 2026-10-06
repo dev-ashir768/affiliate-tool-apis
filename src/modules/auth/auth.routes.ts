@@ -1,10 +1,15 @@
 import { Router } from "express";
-import type { CookieOptions, Response } from "express";
+import type { CookieOptions, Request, Response } from "express";
 import { env } from "../../config/env.js";
 import { AppError } from "../../lib/errors.js";
 import { validateBody } from "../../middleware/validate.js";
 import { authenticate } from "../../middleware/authenticate.js";
-import { rateLimit, rateLimitKey } from "../../middleware/rate-limit.js";
+import {
+  isTrustedBff,
+  rateLimit,
+  rateLimitEmailKey,
+  rateLimitKey,
+} from "../../middleware/rate-limit.js";
 import {
   forgotPasswordSchema,
   loginSchema,
@@ -12,7 +17,7 @@ import {
   registerSchema,
   resetPasswordSchema,
 } from "./auth.schemas.js";
-import { verifyAccessToken } from "../../lib/tokens.js";
+import { verifyAccessTokenAllowExpired } from "../../lib/tokens.js";
 import {
   getMe,
   login,
@@ -26,14 +31,52 @@ import { refreshTtl } from "./refresh-store.js";
 
 export const authRoutes = Router();
 
-authRoutes.use(
-  rateLimit({
-    key: rateLimitKey("auth"),
-    limit: 20,
-    windowSec: 60,
-    failClosed: true,
-  })
-);
+/**
+ * Per-route limits keyed by the real client IP (forwarded by the BFF) and, where
+ * an email is supplied, by account — one tenant cannot exhaust another's budget.
+ */
+const limitLoginIp = rateLimit({
+  key: rateLimitKey("auth-login"),
+  limit: 20,
+  windowSec: 60,
+  failClosed: true,
+});
+const limitLoginEmail = rateLimit({
+  key: rateLimitEmailKey("auth-login"),
+  limit: 10,
+  windowSec: 15 * 60,
+  failClosed: true,
+});
+const limitRegister = rateLimit({
+  key: rateLimitKey("auth-register"),
+  limit: 10,
+  windowSec: 60 * 60,
+  failClosed: true,
+});
+const limitForgotIp = rateLimit({
+  key: rateLimitKey("auth-forgot"),
+  limit: 10,
+  windowSec: 60 * 60,
+  failClosed: true,
+});
+const limitForgotEmail = rateLimit({
+  key: rateLimitEmailKey("auth-forgot"),
+  limit: 3,
+  windowSec: 60 * 60,
+  failClosed: true,
+});
+const limitReset = rateLimit({
+  key: rateLimitKey("auth-reset"),
+  limit: 10,
+  windowSec: 15 * 60,
+  failClosed: true,
+});
+// Refresh runs on navigations; fail open so a Redis blip never logs users out.
+const limitRefresh = rateLimit({
+  key: rateLimitKey("auth-refresh"),
+  limit: 120,
+  windowSec: 60,
+});
 
 function cookieSecure(): boolean {
   if (env.COOKIE_SECURE !== undefined) return env.COOKIE_SECURE;
@@ -55,16 +98,13 @@ function refreshCookieOptions(): CookieOptions {
  * - PORTAL_BFF_SECRET unset: legacy behavior (return token; set secret in prod to lock down)
  * - secret set: require matching X-Portal-Bff-Secret header
  */
-function mayReturnRefreshInBody(req: { headers: { [key: string]: unknown } }): boolean {
-  const configured = env.PORTAL_BFF_SECRET;
-  if (!configured) return true;
-  const header = req.headers["x-portal-bff-secret"];
-  const value = Array.isArray(header) ? header[0] : header;
-  return typeof value === "string" && value === configured;
+function mayReturnRefreshInBody(req: Request): boolean {
+  if (!env.PORTAL_BFF_SECRET) return true;
+  return isTrustedBff(req);
 }
 
 function authTokenPayload(
-  req: { headers: Record<string, unknown> },
+  req: Request,
   tokens: { accessToken: string; refreshToken: string },
 ) {
   if (mayReturnRefreshInBody(req)) {
@@ -102,7 +142,7 @@ function rawRefreshFromRequest(req: {
   return raw;
 }
 
-authRoutes.post("/register", validateBody(registerSchema), async (req, res, next) => {
+authRoutes.post("/register", limitRegister, validateBody(registerSchema), async (req, res, next) => {
   try {
     const result = await register(req.body);
     setRefreshCookie(res, result.refreshToken);
@@ -118,7 +158,7 @@ authRoutes.post("/register", validateBody(registerSchema), async (req, res, next
   }
 });
 
-authRoutes.post("/login", validateBody(loginSchema), async (req, res, next) => {
+authRoutes.post("/login", limitLoginIp, validateBody(loginSchema), limitLoginEmail, async (req, res, next) => {
   try {
     const result = await login(req.body);
     setRefreshCookie(res, result.refreshToken);
@@ -134,23 +174,24 @@ authRoutes.post("/login", validateBody(loginSchema), async (req, res, next) => {
   }
 });
 
-authRoutes.post("/refresh", validateBody(refreshSchema), async (req, res, next) => {
+authRoutes.post("/refresh", limitRefresh, validateBody(refreshSchema), async (req, res, next) => {
   try {
     const raw = rawRefreshFromRequest(req);
-    let preferredOrgId: string | null | undefined;
+    // The prior (usually expired) access token only hints which org to keep.
+    let hint: { sub: string; orgId: string | null } | null = null;
     const header = req.headers.authorization;
     if (header?.startsWith("Bearer ")) {
       const access = header.slice("Bearer ".length).trim();
       if (access) {
         try {
-          const prior = await verifyAccessToken(access);
-          preferredOrgId = prior.orgId;
+          const prior = await verifyAccessTokenAllowExpired(access);
+          hint = { sub: prior.sub, orgId: prior.orgId };
         } catch {
-          // Expired/invalid access token — fall back to first ACTIVE membership
+          // Bad signature — fall back to first ACTIVE membership
         }
       }
     }
-    const result = await rotateRefresh(raw, preferredOrgId);
+    const result = await rotateRefresh(raw, hint);
     setRefreshCookie(res, result.refreshToken);
     res.json(authTokenPayload(req, result));
   } catch (err) {
@@ -185,7 +226,9 @@ authRoutes.get("/me", authenticate, async (req, res, next) => {
 
 authRoutes.post(
   "/forgot-password",
+  limitForgotIp,
   validateBody(forgotPasswordSchema),
+  limitForgotEmail,
   async (req, res, next) => {
     try {
       const result = await requestPasswordReset(req.body);
@@ -198,6 +241,7 @@ authRoutes.post(
 
 authRoutes.post(
   "/reset-password",
+  limitReset,
   validateBody(resetPasswordSchema),
   async (req, res, next) => {
     try {

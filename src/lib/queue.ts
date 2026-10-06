@@ -9,13 +9,33 @@ export const AUTOMATION_RUN_QUEUE = "automation-run";
 
 export function bullConnection() {
   const url = new URL(env.REDIS_URL);
+  const db = Number(url.pathname.slice(1) || 0);
   return {
     host: url.hostname,
     port: Number(url.port || 6379),
-    password: url.password || undefined,
+    username: url.username ? decodeURIComponent(url.username) : undefined,
+    password: url.password ? decodeURIComponent(url.password) : undefined,
+    db: Number.isFinite(db) ? db : 0,
+    ...(url.protocol === "rediss:" ? { tls: {} } : {}),
     maxRetriesPerRequest: null as null,
   };
 }
+
+/** Keep Redis from accumulating finished jobs forever. */
+const RETENTION = {
+  removeOnComplete: { age: 24 * 3600, count: 1000 },
+  removeOnFail: { age: 7 * 24 * 3600, count: 5000 },
+};
+
+/**
+ * Retries only where re-running is harmless. Outreach, affiliate invites and
+ * automation steps message creators, so they run once and surface failures in
+ * their run/message status instead of risking duplicate sends.
+ */
+const SAFE_RETRY = {
+  attempts: 3,
+  backoff: { type: "exponential", delay: 5_000 },
+};
 
 let _shopVerifyQueue: Queue | null = null;
 let _discoverySyncQueue: Queue | null = null;
@@ -28,6 +48,7 @@ export function getShopVerifyQueue(): Queue {
   if (!_shopVerifyQueue) {
     _shopVerifyQueue = new Queue(SHOP_VERIFY_QUEUE, {
       connection: bullConnection(),
+      defaultJobOptions: { ...RETENTION, ...SAFE_RETRY },
     });
   }
   return _shopVerifyQueue;
@@ -37,6 +58,7 @@ export function getDiscoverySyncQueue(): Queue {
   if (!_discoverySyncQueue) {
     _discoverySyncQueue = new Queue(DISCOVERY_SYNC_QUEUE, {
       connection: bullConnection(),
+      defaultJobOptions: { ...RETENTION, ...SAFE_RETRY },
     });
   }
   return _discoverySyncQueue;
@@ -46,6 +68,7 @@ export function getOutreachSendQueue(): Queue {
   if (!_outreachSendQueue) {
     _outreachSendQueue = new Queue(OUTREACH_SEND_QUEUE, {
       connection: bullConnection(),
+      defaultJobOptions: RETENTION,
     });
   }
   return _outreachSendQueue;
@@ -55,6 +78,7 @@ export function getAffiliateInviteQueue(): Queue {
   if (!_affiliateInviteQueue) {
     _affiliateInviteQueue = new Queue(AFFILIATE_INVITE_QUEUE, {
       connection: bullConnection(),
+      defaultJobOptions: RETENTION,
     });
   }
   return _affiliateInviteQueue;
@@ -64,6 +88,7 @@ export function getAutomationRunQueue(): Queue {
   if (!_automationRunQueue) {
     _automationRunQueue = new Queue(AUTOMATION_RUN_QUEUE, {
       connection: bullConnection(),
+      defaultJobOptions: RETENTION,
     });
   }
   return _automationRunQueue;
