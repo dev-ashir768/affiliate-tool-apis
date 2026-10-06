@@ -36,8 +36,6 @@ export const creatorsRoutes = Router();
 
 creatorsRoutes.use(authenticate, requireOrg, requirePaidAccess);
 
-creatorsRoutes.use(authenticate, requireOrg);
-
 creatorsRoutes.get("/", async (req, res, next) => {
   try {
     if (!req.auth?.orgId)

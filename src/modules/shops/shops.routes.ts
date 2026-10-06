@@ -24,8 +24,8 @@ import {
 
 export const shopsRoutes = Router();
 
-shopsRoutes.use(authenticate, requireOrg);
-shopsRoutes.use(requirePaidAccess);
+// Applies to every route below — do not repeat per route.
+shopsRoutes.use(authenticate, requireOrg, requirePaidAccess);
 
 const oauthStartSchema = z.object({
   region: z.enum(["US", "UK"]).default("US"),
@@ -51,8 +51,6 @@ shopsRoutes.get("/", async (req, res, next) => {
 
 shopsRoutes.get(
   "/tiktok/oauth/status",
-  authenticate,
-  requireOrg,
   async (_req, res, next) => {
     try {
       res.json(getTikTokOAuthStatus());
@@ -64,8 +62,6 @@ shopsRoutes.get(
 
 shopsRoutes.post(
   "/tiktok/oauth/start",
-  authenticate,
-  requireOrg,
   requireRole("OWNER", "ADMIN"),
   rateLimit({
     key: rateLimitTenantKey("tiktok-oauth-start"),
@@ -93,8 +89,6 @@ shopsRoutes.post(
 
 shopsRoutes.post(
   "/tiktok/oauth/complete",
-  authenticate,
-  requireOrg,
   requireRole("OWNER", "ADMIN"),
   rateLimit({
     key: rateLimitTenantKey("tiktok-oauth-complete"),
@@ -122,8 +116,6 @@ shopsRoutes.post(
 
 shopsRoutes.post(
   "/connect",
-  authenticate,
-  requireOrg,
   requireRole("OWNER", "ADMIN"),
   validateBody(connectShopSchema),
   async (req, res, next) => {
@@ -142,7 +134,7 @@ shopsRoutes.post(
   },
 );
 
-shopsRoutes.get("/:id", authenticate, requireOrg, async (req, res, next) => {
+shopsRoutes.get("/:id", async (req, res, next) => {
   try {
     if (!req.auth?.orgId) {
       throw new AppError("UNAUTHORIZED", "Missing access token", 401);
@@ -156,8 +148,6 @@ shopsRoutes.get("/:id", authenticate, requireOrg, async (req, res, next) => {
 
 shopsRoutes.get(
   "/:id/products",
-  authenticate,
-  requireOrg,
   async (req, res, next) => {
     try {
       if (!req.auth?.orgId) {
@@ -190,8 +180,6 @@ shopsRoutes.post(
     limit: 10,
     windowSec: 60,
   }),
-  authenticate,
-  requireOrg,
   requireRole("OWNER", "ADMIN"),
   async (req, res, next) => {
     try {
@@ -208,8 +196,6 @@ shopsRoutes.post(
 
 shopsRoutes.delete(
   "/:id",
-  authenticate,
-  requireOrg,
   requireRole("OWNER", "ADMIN"),
   async (req, res, next) => {
     try {

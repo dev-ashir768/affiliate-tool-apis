@@ -23,8 +23,6 @@ export const samplesRoutes = Router();
 
 samplesRoutes.use(authenticate, requireOrg, requirePaidAccess);
 
-samplesRoutes.use(authenticate, requireOrg);
-
 samplesRoutes.get(
   "/",
   validateQuery(listSamplesQuerySchema),

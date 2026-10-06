@@ -24,8 +24,6 @@ export const messagesRoutes = Router();
 
 messagesRoutes.use(authenticate, requireOrg, requirePaidAccess);
 
-messagesRoutes.use(authenticate, requireOrg);
-
 messagesRoutes.get("/conversations", async (req, res, next) => {
   try {
     if (!req.auth?.orgId) throw new AppError("UNAUTHORIZED", "Missing org", 401);
