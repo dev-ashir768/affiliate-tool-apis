@@ -1,4 +1,4 @@
-# Tiksly Operator Runbook
+# influxa Operator Runbook
 
 ## Local stack
 
