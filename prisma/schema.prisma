@@ -320,6 +320,8 @@ model BotIdentity {
   status          BotStatus @default(AVAILABLE)
   reservedForOrgId String?
   reservedAt      DateTime?
+  sessionVaultCiphertext String?
+  sessionCapturedAt      DateTime?
   shop            Shop?
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt

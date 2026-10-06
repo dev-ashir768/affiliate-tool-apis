@@ -78,11 +78,23 @@ const schema = z.object({
   /** CSS selector for invite accept on live pages (override when TikTok DOM changes). */
   SHOP_VERIFY_LIVE_ACCEPT_SELECTOR: z.string().default("[data-e2e='invite-accept'], button:has-text('Accept')"),
   SHOP_VERIFY_LIVE_TIMEOUT_MS: z.coerce.number().int().positive().default(60_000),
+  /** Seller Center sign-in pages opened by `npm run bot:login`. */
+  SHOP_VERIFY_LOGIN_URL_US: z.string().url().default("https://seller-us.tiktok.com/"),
+  SHOP_VERIFY_LOGIN_URL_UK: z.string().url().default("https://seller-uk.tiktok.com/"),
+  SHOP_VERIFY_HEADLESS: z
+    .enum(["true", "false", "1", "0"])
+    .default("true")
+    .transform((v) => v === "true" || v === "1"),
+  /** Regex (case-insensitive) for the invite link inside the TikTok invite email. */
+  BOT_INVITE_LINK_PATTERN: z
+    .string()
+    .default(String.raw`https://[^\s"'<>]*tiktok[^\s"'<>]*`),
   /** none = skip; console = log-only; imap = poll bot mailbox for invite mail. */
   BOT_INBOX_PROVIDER: z.enum(["none", "console", "imap"]).default("none"),
   BOT_INBOX_POLL_MS: z.coerce.number().int().positive().default(5_000),
   BOT_INBOX_TIMEOUT_MS: z.coerce.number().int().positive().default(120_000),
-  BOT_INBOX_SUBJECT_INCLUDES: z.string().default("invite"),
+  /** Optional subject filter; empty matches any mail sent to the bot address. */
+  BOT_INBOX_SUBJECT_INCLUDES: z.string().default(""),
   IMAP_HOST: z.string().optional(),
   IMAP_PORT: z.coerce.number().int().default(993),
   IMAP_USER: z.string().optional(),

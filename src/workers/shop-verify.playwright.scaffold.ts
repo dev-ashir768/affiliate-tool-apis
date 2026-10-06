@@ -3,7 +3,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { env } from "../config/env.js";
 import { logger } from "../lib/logger.js";
 import { prisma } from "../lib/prisma.js";
-import { encryptVault } from "../lib/crypto.js";
+import { decryptVault, encryptVault } from "../lib/crypto.js";
 import { waitForBotInviteIfConfigured } from "../lib/bot-inbox.js";
 import { ShopVerifyTerminalError } from "./shop-verify.errors.js";
 import {
@@ -24,6 +24,11 @@ type PlaywrightPage = {
     opts?: { timeout?: number }
   ) => Promise<unknown>;
   evaluate: <T>(fn: () => T) => Promise<T>;
+  url: () => string;
+  waitForLoadState: (
+    state: "load" | "domcontentloaded" | "networkidle",
+    opts?: { timeout?: number }
+  ) => Promise<void>;
   close: () => Promise<void>;
 };
 
@@ -34,7 +39,7 @@ type PlaywrightContext = {
 };
 
 type PlaywrightBrowser = {
-  newContext: () => Promise<PlaywrightContext>;
+  newContext: (opts?: { storageState?: unknown }) => Promise<PlaywrightContext>;
   close: () => Promise<void>;
 };
 
@@ -129,28 +134,108 @@ async function runFixtureAccept(opts: {
   return "accepted";
 }
 
-async function runLiveAccept(opts: {
-  page: PlaywrightPage;
-  region: "US" | "UK";
-}): Promise<void> {
-  const url = resolveLiveInviteUrl(opts.region);
-  const selector = liveAcceptSelector();
-  const timeout = liveTimeoutMs();
+const LOGIN_URL_RE = /\/(login|signin|sign-in|passport|account\/register)\b/i;
 
-  await opts.page.goto(url, {
-    waitUntil: "domcontentloaded",
-    timeout,
+function readBotSession(ciphertext: string | null): unknown {
+  if (!ciphertext) throw new ShopVerifyTerminalError("BOT_SESSION_MISSING");
+  try {
+    return JSON.parse(decryptVault(ciphertext));
+  } catch {
+    throw new ShopVerifyTerminalError("BOT_SESSION_MISSING");
+  }
+}
+
+/**
+ * Live verify: find the invite mail sent to this shop's bot, open its link in
+ * the bot's saved Seller Center session, and accept. Login itself is never
+ * automated — a staff member captures the session with `npm run bot:login`.
+ */
+async function runLiveVerify(data: ShopVerifyJobData): Promise<void> {
+  const { shopId, verificationJobId } = data;
+  const shop = await prisma.shop.findUniqueOrThrow({
+    where: { id: shopId },
+    include: { botIdentity: true },
   });
-  await opts.page.waitForSelector(selector, { timeout });
-  await opts.page.click(selector, { timeout });
+  const bot = shop.botIdentity;
+  if (!bot) throw new ShopVerifyTerminalError("BOT_SESSION_MISSING");
+  const storageState = readBotSession(bot.sessionVaultCiphertext);
+
+  // IMAP SINCE is day-granular; back off a day so timezone edges don't drop the mail.
+  const since = new Date(shop.createdAt.getTime() - 24 * 60 * 60 * 1000);
+  const hit = await waitForBotInviteIfConfigured(bot.email, since);
+  const inviteUrl = hit?.inviteUrl ?? resolveLiveInviteUrl(shop.region);
+
+  const timeout = liveTimeoutMs();
+  const selector = liveAcceptSelector();
+  const chromium = await launchChromium();
+  const browser = await chromium.launch({ headless: env.SHOP_VERIFY_HEADLESS });
+  try {
+    const context = await browser.newContext({ storageState });
+    const page = await context.newPage();
+    try {
+      await page.goto(inviteUrl, { waitUntil: "domcontentloaded", timeout });
+
+      if (LOGIN_URL_RE.test(page.url())) {
+        await prisma.botIdentity.update({
+          where: { id: bot.id },
+          data: { sessionVaultCiphertext: null, sessionCapturedAt: null },
+        });
+        throw new ShopVerifyTerminalError("BOT_SESSION_EXPIRED");
+      }
+
+      try {
+        await page.waitForSelector(selector, { timeout });
+      } catch {
+        throw new ShopVerifyTerminalError("INVITE_ACCEPT_NOT_FOUND");
+      }
+      await page.click(selector, { timeout });
+      await page
+        .waitForLoadState("networkidle", { timeout })
+        .catch(() => undefined);
+
+      const refreshed = await context.storageState();
+      await prisma.botIdentity.update({
+        where: { id: bot.id },
+        data: { sessionVaultCiphertext: encryptVault(JSON.stringify(refreshed)) },
+      });
+
+      logger.info("live shop verify accepted invite", {
+        shopId,
+        inviteFromEmail: Boolean(hit?.inviteUrl),
+      });
+      await activateShopAfterVerify(shopId, verificationJobId, {
+        sessionVaultCiphertext: encryptVault(
+          JSON.stringify({
+            mode: "playwright",
+            target: "live",
+            region: shop.region,
+            inviteFromEmail: Boolean(hit?.inviteUrl),
+            verifiedAt: new Date().toISOString(),
+          }),
+        ),
+      });
+    } finally {
+      await page.close().catch(() => undefined);
+      await context.close().catch(() => undefined);
+    }
+  } catch (err) {
+    if (err instanceof ShopVerifyTerminalError) throw err;
+    const message = err instanceof Error ? err.message : "verify failed";
+    if (/timeout/i.test(message)) {
+      throw new ShopVerifyTerminalError("VERIFY_TIMEOUT", message);
+    }
+    throw err;
+  } finally {
+    await browser.close();
+  }
 }
 
 /**
  * Playwright shop verify.
  * - Default: dry-run activates without browser.
  * - Non-dry-run + SHOP_VERIFY_TARGET=fixture: local invite-accept HTML.
- * - Non-dry-run + SHOP_VERIFY_TARGET=live: configured Seller Center URL + accept selector.
- * - Optional BOT_INBOX_PROVIDER waits for invite mail before browser (live path).
+ * - Non-dry-run + SHOP_VERIFY_TARGET=live: invite link from the bot inbox (or the
+ *   configured region URL) opened in the bot's saved session, then accepted.
  */
 export async function runPlaywrightVerify(data: ShopVerifyJobData): Promise<void> {
   const { shopId, verificationJobId } = data;
@@ -168,20 +253,12 @@ export async function runPlaywrightVerify(data: ShopVerifyJobData): Promise<void
     return;
   }
 
-  const shop = await prisma.shop.findUniqueOrThrow({
-    where: { id: shopId },
-    include: { botIdentity: true },
-  });
-
-  if (env.SHOP_VERIFY_TARGET === "live" && shop.botIdentity?.email) {
-    const hit = await waitForBotInviteIfConfigured(shop.botIdentity.email);
-    if (hit) {
-      logger.info("bot invite detected before live verify", {
-        shopId,
-        subject: hit.subject,
-      });
-    }
+  if (env.SHOP_VERIFY_TARGET === "live") {
+    await runLiveVerify(data);
+    return;
   }
+
+  const shop = await prisma.shop.findUniqueOrThrow({ where: { id: shopId } });
 
   const chromium = await launchChromium();
   const browser = await chromium.launch({ headless: true });
@@ -189,27 +266,22 @@ export async function runPlaywrightVerify(data: ShopVerifyJobData): Promise<void
     const context = await browser.newContext();
     const page = await context.newPage();
     try {
-      const target = env.SHOP_VERIFY_TARGET;
-      if (target === "live") {
-        await runLiveAccept({ page, region: shop.region });
-      } else {
-        await runFixtureAccept({
-          page,
-          shopId,
-          region: shop.region,
-        });
-      }
+      await runFixtureAccept({
+        page,
+        shopId,
+        region: shop.region,
+      });
 
       const storageState = await context.storageState();
       await activateShopAfterVerify(shopId, verificationJobId, {
         sessionVaultCiphertext: encryptVault(
           JSON.stringify({
             mode: "playwright",
-            target,
+            target: "fixture",
             region: shop.region,
             storageState,
             verifiedAt: new Date().toISOString(),
-            fixture: target === "fixture",
+            fixture: true,
           })
         ),
       });

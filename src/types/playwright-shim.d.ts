@@ -1,7 +1,7 @@
 declare module "playwright" {
   export const chromium: {
     launch: (opts?: { headless?: boolean }) => Promise<{
-      newContext: () => Promise<{
+      newContext: (opts?: { storageState?: unknown }) => Promise<{
         newPage: () => Promise<{
           goto: (
             url: string,
@@ -14,6 +14,7 @@ declare module "playwright" {
           ) => Promise<unknown>;
           evaluate: <T>(fn: () => T) => Promise<T>;
           title: () => Promise<string>;
+          url: () => string;
           close: () => Promise<void>;
         }>;
         storageState: () => Promise<unknown>;

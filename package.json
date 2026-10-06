@@ -34,7 +34,8 @@
     "db:studio": "prisma studio",
     "db:status": "prisma migrate status",
     "billing:sync-plan-prices": "tsx scripts/fix-plan-stripe-prices.ts",
-    "check:jwt": "tsx scripts/check-jwt-keys.ts"
+    "check:jwt": "tsx scripts/check-jwt-keys.ts",
+    "bot:login": "tsx scripts/bot-login.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
