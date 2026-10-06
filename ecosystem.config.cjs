@@ -12,7 +12,7 @@
 module.exports = {
   apps: [
     {
-      name: "tiksly-api",
+      name: "influxa-api",
       cwd: __dirname,
       script: "dist/server.js",
       instances: 1,
@@ -28,7 +28,7 @@ module.exports = {
       merge_logs: true,
     },
     {
-      name: "tiksly-worker",
+      name: "influxa-worker",
       cwd: __dirname,
       script: "dist/worker.js",
       instances: 1,
