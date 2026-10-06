@@ -17,8 +17,6 @@ export const ordersRoutes = Router();
 
 ordersRoutes.use(authenticate, requireOrg, requirePaidAccess);
 
-ordersRoutes.use(authenticate, requireOrg);
-
 ordersRoutes.get("/", async (req, res, next) => {
   try {
     if (!req.auth?.orgId) throw new AppError("UNAUTHORIZED", "Missing org", 401);

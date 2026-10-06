@@ -26,8 +26,6 @@ export const outreachRoutes = Router();
 
 outreachRoutes.use(authenticate, requireOrg, requirePaidAccess);
 
-outreachRoutes.use(authenticate, requireOrg);
-
 outreachRoutes.get("/email-status", async (_req, res, next) => {
   try {
     res.json(getOutreachEmailStatus());

@@ -17,8 +17,6 @@ export const automationsRoutes = Router();
 
 automationsRoutes.use(authenticate, requireOrg, requirePaidAccess);
 
-automationsRoutes.use(authenticate, requireOrg);
-
 automationsRoutes.get("/", async (req, res, next) => {
   try {
     if (!req.auth?.orgId) throw new AppError("UNAUTHORIZED", "Missing org", 401);
