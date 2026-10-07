@@ -12,10 +12,18 @@ import {
   connectShop,
   disconnectShop,
   getShop,
+  getShopBotInbox,
   listShopProducts,
   listShops,
 } from "./shops.service.js";
 import { requestVerify } from "./verify.service.js";
+import {
+  cancelBotActivation,
+  completeBotActivation,
+  getActivationFrame,
+  sendActivationInput,
+  startBotActivation,
+} from "./bot-activation.service.js";
 import {
   completeTikTokShopOAuth,
   getTikTokOAuthStatus,
@@ -31,6 +39,41 @@ const oauthStartSchema = z.object({
   region: z.enum(["US", "UK"]).default("US"),
   shopId: z.string().min(1).optional().nullable(),
 });
+
+const activationInputSchema = z.object({
+  events: z
+    .array(
+      z.discriminatedUnion("type", [
+        z.object({
+          type: z.literal("mouse"),
+          action: z.enum(["down", "up", "move"]),
+          x: z.number().finite(),
+          y: z.number().finite(),
+          button: z.enum(["left", "right"]).optional(),
+        }),
+        z.object({
+          type: z.literal("wheel"),
+          x: z.number().finite(),
+          y: z.number().finite(),
+          deltaX: z.number().finite().max(5000).min(-5000),
+          deltaY: z.number().finite().max(5000).min(-5000),
+        }),
+        z.object({ type: z.literal("text"), text: z.string().min(1).max(500) }),
+        z.object({ type: z.literal("key"), key: z.string().min(1).max(20) }),
+      ]),
+    )
+    .min(1)
+    .max(200),
+});
+
+const activationCompleteSchema = z.object({ force: z.boolean().optional() });
+
+function orgOf(req: { auth?: { orgId?: string | null } }): string {
+  if (!req.auth?.orgId) {
+    throw new AppError("UNAUTHORIZED", "Missing access token", 401);
+  }
+  return req.auth.orgId;
+}
 
 const oauthCompleteSchema = z.object({
   code: z.string().min(1),
@@ -188,6 +231,108 @@ shopsRoutes.post(
       }
       const result = await requestVerify(req.auth.orgId, String(req.params.id));
       res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+shopsRoutes.post(
+  "/:id/bot-activation",
+  rateLimit({ key: rateLimitTenantKey("bot-activation-start"), limit: 5, windowSec: 60 }),
+  requireRole("OWNER", "ADMIN"),
+  async (req, res, next) => {
+    try {
+      res.status(201).json(await startBotActivation(orgOf(req), String(req.params.id)));
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+shopsRoutes.get(
+  "/:id/bot-activation/frame",
+  rateLimit({ key: rateLimitTenantKey("bot-activation-frame"), limit: 600, windowSec: 60 }),
+  requireRole("OWNER", "ADMIN"),
+  (req, res, next) => {
+    try {
+      const after = Number(req.query.after);
+      const frame = getActivationFrame(
+        orgOf(req),
+        String(req.params.id),
+        Number.isFinite(after) ? after : 0,
+      );
+      res.setHeader("Cache-Control", "no-store");
+      if (!frame) {
+        res.status(204).end();
+        return;
+      }
+      res.json(frame);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+shopsRoutes.post(
+  "/:id/bot-activation/input",
+  rateLimit({ key: rateLimitTenantKey("bot-activation-input"), limit: 900, windowSec: 60 }),
+  requireRole("OWNER", "ADMIN"),
+  validateBody(activationInputSchema),
+  async (req, res, next) => {
+    try {
+      await sendActivationInput(orgOf(req), String(req.params.id), req.body.events);
+      res.status(204).end();
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+shopsRoutes.post(
+  "/:id/bot-activation/complete",
+  requireRole("OWNER", "ADMIN"),
+  validateBody(activationCompleteSchema),
+  async (req, res, next) => {
+    try {
+      res.json(
+        await completeBotActivation(orgOf(req), String(req.params.id), {
+          force: req.body.force,
+        }),
+      );
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+shopsRoutes.delete(
+  "/:id/bot-activation",
+  requireRole("OWNER", "ADMIN"),
+  async (req, res, next) => {
+    try {
+      await cancelBotActivation(orgOf(req), String(req.params.id));
+      res.status(204).end();
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+shopsRoutes.get(
+  "/:id/bot-inbox",
+  rateLimit({
+    key: rateLimitTenantKey("shop-bot-inbox"),
+    limit: 20,
+    windowSec: 60,
+  }),
+  requireRole("OWNER", "ADMIN"),
+  async (req, res, next) => {
+    try {
+      if (!req.auth?.orgId) {
+        throw new AppError("UNAUTHORIZED", "Missing access token", 401);
+      }
+      res.json(await getShopBotInbox(req.auth.orgId, String(req.params.id)));
     } catch (err) {
       next(err);
     }

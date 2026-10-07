@@ -90,7 +90,11 @@ type ImapClient = {
     query: Record<string, unknown>,
     opts: { uid: true },
   ) => Promise<{
-    envelope?: { subject?: string; from?: Array<{ address?: string }> };
+    envelope?: {
+      subject?: string;
+      from?: Array<{ address?: string }>;
+      to?: Array<{ address?: string }>;
+    };
     internalDate?: string | Date;
     source?: Buffer;
   } | false>;
@@ -102,32 +106,114 @@ type ImapClient = {
   logout: () => Promise<void>;
 };
 
+async function createImapClient(): Promise<ImapClient> {
+  if (!env.IMAP_HOST || !env.IMAP_USER || !env.IMAP_PASS) {
+    throw new ShopVerifyTerminalError("INBOX_MISCONFIGURED");
+  }
+
+  let ImapFlow: new (opts: Record<string, unknown>) => ImapClient;
+  try {
+    const mod = await import("imapflow");
+    ImapFlow = mod.ImapFlow as unknown as typeof ImapFlow;
+  } catch {
+    throw new ShopVerifyTerminalError(
+      "INBOX_MISCONFIGURED",
+      "imapflow is not installed; npm i imapflow or set BOT_INBOX_PROVIDER=none",
+    );
+  }
+
+  return new ImapFlow({
+    host: env.IMAP_HOST,
+    port: env.IMAP_PORT,
+    secure: env.IMAP_TLS,
+    auth: { user: env.IMAP_USER, pass: env.IMAP_PASS },
+    logger: false,
+  });
+}
+
+/** Readable text of a raw message: decoded parts with HTML tags stripped. */
+function messageText(rawSource: string): string {
+  const text = /Content-Transfer-Encoding:\s*quoted-printable/i.test(rawSource)
+    ? decodeQuotedPrintable(rawSource)
+    : rawSource;
+  const bodyStart = text.search(/\r?\n\r?\n/);
+  const body = `${bodyStart >= 0 ? text.slice(bodyStart) : text}\n${decodeBase64Parts(rawSource)}`;
+  return body
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/^(Content-[\w-]+:.*|--[\w=.-]+(--)?|MIME-Version:.*)$/gim, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** One-time code from a verification mail: subject first, then text near "code". */
+export function extractVerificationCode(subject: string, text: string): string | null {
+  const fromSubject = subject.match(/\b(\d{4,8})\b/);
+  if (fromSubject) return fromSubject[1];
+  const near = text.match(
+    /(?:code|verification|verify|OTP|passcode)[^0-9]{0,60}\b(\d{4,8})\b/i,
+  );
+  return near ? near[1] : null;
+}
+
+export type BotMailSummary = {
+  subject: string;
+  from: string;
+  receivedAt: string;
+  code: string | null;
+  preview: string;
+};
+
+/**
+ * Recent mail addressed exactly to one bot. The catch-all mailbox holds every
+ * bot's mail, so results are filtered on the envelope recipient — callers must
+ * only pass a bot address the requester owns.
+ */
+export async function listRecentBotMail(
+  botEmail: string,
+  opts: { sinceHours?: number; limit?: number } = {},
+): Promise<BotMailSummary[]> {
+  const target = botEmail.toLowerCase();
+  const since = new Date(Date.now() - (opts.sinceHours ?? 48) * 60 * 60 * 1000);
+  const client = await createImapClient();
+  try {
+    await client.connect();
+    await client.mailboxOpen("INBOX");
+    const uids = (await client.search({ to: target, since }, { uid: true })) || [];
+    const out: BotMailSummary[] = [];
+    for (const uid of uids.slice(-(opts.limit ?? 10)).reverse()) {
+      const msg = await client.fetchOne(
+        uid,
+        { envelope: true, internalDate: true, source: true },
+        { uid: true },
+      );
+      if (!msg) continue;
+      const recipients = (msg.envelope?.to ?? []).map((a) => a.address?.toLowerCase());
+      if (!recipients.includes(target)) continue;
+      const subject = msg.envelope?.subject ?? "";
+      const text = msg.source ? messageText(msg.source.toString("utf8")) : "";
+      out.push({
+        subject,
+        from: msg.envelope?.from?.[0]?.address ?? "",
+        receivedAt: msg.internalDate
+          ? new Date(msg.internalDate).toISOString()
+          : new Date().toISOString(),
+        code: extractVerificationCode(subject, text),
+        preview: text.slice(0, 200),
+      });
+    }
+    return out;
+  } finally {
+    await client.logout().catch(() => undefined);
+  }
+}
+
 const imapInbox: BotInboxProvider = {
   name: "imap",
   async waitForInviteEmail({ botEmail, since, subjectIncludes, timeoutMs, pollMs }) {
-    if (!env.IMAP_HOST || !env.IMAP_USER || !env.IMAP_PASS) {
-      throw new ShopVerifyTerminalError("INBOX_MISCONFIGURED");
-    }
-
-    let ImapFlow: new (opts: Record<string, unknown>) => ImapClient;
-    try {
-      const mod = await import("imapflow");
-      ImapFlow = mod.ImapFlow as unknown as typeof ImapFlow;
-    } catch {
-      throw new ShopVerifyTerminalError(
-        "INBOX_MISCONFIGURED",
-        "imapflow is not installed; npm i imapflow or set BOT_INBOX_PROVIDER=none",
-      );
-    }
-
-    const client = new ImapFlow({
-      host: env.IMAP_HOST,
-      port: env.IMAP_PORT,
-      secure: env.IMAP_TLS,
-      auth: { user: env.IMAP_USER, pass: env.IMAP_PASS },
-      logger: false,
-    });
-
+    const client = await createImapClient();
     const needle = subjectIncludes.trim().toLowerCase();
     const deadline = Date.now() + timeoutMs;
 

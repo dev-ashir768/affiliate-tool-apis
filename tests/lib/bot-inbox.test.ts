@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { extractInviteUrl } from "../../src/lib/bot-inbox.js";
+import {
+  extractInviteUrl,
+  extractVerificationCode,
+} from "../../src/lib/bot-inbox.js";
 
 const PATTERN = String.raw`https://[^\s"'<>]*tiktok[^\s"'<>]*`;
 
@@ -45,5 +48,24 @@ describe("extractInviteUrl", () => {
 
   it("returns null when no TikTok link is present", () => {
     expect(extractInviteUrl("Hello, no links here", PATTERN)).toBeNull();
+  });
+});
+
+describe("extractVerificationCode", () => {
+  it("reads a code from the subject", () => {
+    expect(extractVerificationCode("482913 is your verification code", "")).toBe("482913");
+  });
+
+  it("reads a code near the word code in the body", () => {
+    expect(
+      extractVerificationCode(
+        "Verify your email",
+        "Hi there, your verification code is: 7731 . It expires in 5 minutes. Order 2026",
+      ),
+    ).toBe("7731");
+  });
+
+  it("returns null when there is no code", () => {
+    expect(extractVerificationCode("Welcome to TikTok Shop", "Thanks for joining")).toBeNull();
   });
 });

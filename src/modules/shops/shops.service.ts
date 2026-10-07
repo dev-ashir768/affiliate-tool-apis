@@ -2,8 +2,10 @@ import type { ShopRegion } from "@prisma/client";
 import { prisma } from "../../lib/prisma.js";
 import { AppError } from "../../lib/errors.js";
 import { searchShopProducts } from "../../lib/tiktok-shop/client.js";
-import { reserveBot } from "../bots/bots.service.js";
+import { allocateBotForShop } from "../bots/bots.service.js";
 import { getShopOpenApiCredentials } from "./tiktok-oauth.service.js";
+import { listRecentBotMail } from "../../lib/bot-inbox.js";
+import { logger } from "../../lib/logger.js";
 
 async function countActiveShops(organizationId: string): Promise<number> {
   return prisma.shop.count({
@@ -26,7 +28,11 @@ function toShopResponse(shop: {
   verifiedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
-  botIdentity: { email: string } | null;
+  botIdentity: {
+    email: string;
+    ownerOrganizationId?: string | null;
+    sessionCapturedAt?: Date | null;
+  } | null;
   oauthConnectedAt?: Date | null;
   tiktokGrantedScopes?: string[];
   tiktokAccessExpiresAt?: Date | null;
@@ -37,6 +43,8 @@ function toShopResponse(shop: {
     region: shop.region,
     botIdentityId: shop.botIdentityId,
     botEmail: shop.botIdentity?.email ?? null,
+    botSelfServe: Boolean(shop.botIdentity?.ownerOrganizationId),
+    botActivatedAt: shop.botIdentity?.sessionCapturedAt?.toISOString() ?? null,
     status: shop.status,
     statusReason: shop.statusReason,
     displayName: shop.displayName,
@@ -63,7 +71,7 @@ export async function connectShop(input: {
     throw new AppError("PLAN_LIMIT", "Shop limit reached", 403);
   }
 
-  const bot = await reserveBot(input.organizationId);
+  const bot = await allocateBotForShop(input.organizationId);
 
   try {
     const shop = await prisma.shop.create({
@@ -192,4 +200,31 @@ export async function listShopProducts(
     pageToken: input.pageToken,
     status: input.status ?? "ACTIVATE",
   });
+}
+
+/** Verification mail for an organization's own self-serve bot (codes for TikTok sign-up). */
+export async function getShopBotInbox(organizationId: string, shopId: string) {
+  const shop = await prisma.shop.findFirst({
+    where: { id: shopId, organizationId },
+    include: { botIdentity: true },
+  });
+  if (!shop) throw new AppError("NOT_FOUND", "Shop not found", 404);
+  const bot = shop.botIdentity;
+  if (!bot || bot.ownerOrganizationId !== organizationId) {
+    throw new AppError("NOT_FOUND", "This shop has no bot inbox", 404);
+  }
+  try {
+    const messages = await listRecentBotMail(bot.email);
+    return { botEmail: bot.email, messages };
+  } catch (err) {
+    logger.error("bot inbox read failed", {
+      shopId,
+      err: err instanceof Error ? err.message : String(err),
+    });
+    throw new AppError(
+      "SERVICE_UNAVAILABLE",
+      "Couldn't check the bot inbox right now. Try again in a minute.",
+      503,
+    );
+  }
 }

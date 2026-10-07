@@ -22,9 +22,9 @@ const MESSAGES: Record<ShopVerifyReasonCode, string> = {
   INBOX_MISCONFIGURED:
     "Bot inbox IMAP is not configured; set IMAP_HOST/USER/PASS or BOT_INBOX_PROVIDER=none",
   BOT_SESSION_MISSING:
-    "Bot has no saved TikTok session. Staff must run npm run bot:login for this bot.",
+    "Your bot isn't signed in to TikTok yet. Activate the bot from the Shops page, then verify again.",
   BOT_SESSION_EXPIRED:
-    "Bot's TikTok session expired. Staff must run npm run bot:login for this bot again.",
+    "Your bot's TikTok sign-in expired. Activate the bot again from the Shops page, then verify.",
   INVITE_ACCEPT_NOT_FOUND:
     "Could not find the accept button on the TikTok invite page. Check the invite is still pending.",
 };
