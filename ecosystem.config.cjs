@@ -27,6 +27,9 @@ const shared = {
   IMAP_PORT: "993",
   IMAP_TLS: "true",
   IMAP_USER: "bots@dealhoper.com",
+
+  // Self-serve bots: each shop gets bot-<random>@ this domain (catch-all → IMAP_USER).
+  BOT_EMAIL_DOMAIN: "dealhoper.com",
 };
 
 module.exports = {

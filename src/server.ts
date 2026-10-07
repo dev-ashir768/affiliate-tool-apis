@@ -12,6 +12,7 @@ import {
   outreachSendQueue,
   shopVerifyQueue,
 } from "./lib/queue.js";
+import { closeAllBotActivations } from "./modules/shops/bot-activation.service.js";
 
 if (!process.env.NODE_ENV) {
   logger.warn(
@@ -42,6 +43,7 @@ async function shutdown(signal: string) {
   await new Promise<void>((resolve) => server.close(() => resolve()));
   try {
     await Promise.all([
+      closeAllBotActivations(),
       shopVerifyQueue.close(),
       discoverySyncQueue.close(),
       outreachSendQueue.close(),

@@ -320,11 +320,14 @@ model BotIdentity {
   status          BotStatus @default(AVAILABLE)
   reservedForOrgId String?
   reservedAt      DateTime?
+  ownerOrganizationId String?
   sessionVaultCiphertext String?
   sessionCapturedAt      DateTime?
   shop            Shop?
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
+
+  @@index([ownerOrganizationId, status])
 }
 
 model Shop {

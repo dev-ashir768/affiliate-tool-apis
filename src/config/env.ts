@@ -89,6 +89,11 @@ const schema = z.object({
   BOT_INVITE_LINK_PATTERN: z
     .string()
     .default(String.raw`https://[^\s"'<>]*tiktok[^\s"'<>]*`),
+  /** Domain for self-serve bot emails (catch-all inbox). Unset = staff-managed bot pool. */
+  BOT_EMAIL_DOMAIN: z
+    .string()
+    .regex(/^[a-z0-9.-]+\.[a-z]{2,}$/i, "BOT_EMAIL_DOMAIN must be a bare domain like example.com")
+    .optional(),
   /** none = skip; console = log-only; imap = poll bot mailbox for invite mail. */
   BOT_INBOX_PROVIDER: z.enum(["none", "console", "imap"]).default("none"),
   BOT_INBOX_POLL_MS: z.coerce.number().int().positive().default(5_000),
