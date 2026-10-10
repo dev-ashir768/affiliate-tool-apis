@@ -59,7 +59,8 @@ export async function requestVerify(organizationId: string, shopId: string) {
 
   try {
     const bullJob = await shopVerifyQueue.add("verify", jobData, {
-      jobId: `shop-verify:${shop.id}`,
+      // BullMQ custom jobIds cannot contain ":" (throws "Custom Id cannot contain :").
+      jobId: `shop-verify-${shop.id}`,
       attempts: 3,
       backoff: { type: "exponential", delay: 2000 },
       removeOnComplete: true,
