@@ -190,7 +190,6 @@ export async function planDiscoveryCrawl(
           } satisfies DiscoveryTikTokSyncOptions,
         },
         {
-          // BullMQ custom jobIds cannot contain ":".
           jobId: `crawl-${cell.cellKey}`,
           removeOnComplete: 1_000,
           removeOnFail: 200,
