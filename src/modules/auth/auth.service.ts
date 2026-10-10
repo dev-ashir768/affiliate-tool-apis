@@ -129,7 +129,7 @@ async function resolveAccessClaims(
   };
 }
 
-async function issueSession(claims: AccessClaims) {
+export async function issueSession(claims: AccessClaims) {
   const accessToken = await signAccessToken(claims);
   const { raw, hash } = generateRefreshToken();
   const expiresAt = new Date(Date.now() + refreshTtl() * 1000);

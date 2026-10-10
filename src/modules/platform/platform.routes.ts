@@ -1,5 +1,7 @@
 import { Router } from "express";
+import type { Request } from "express";
 import { z } from "zod";
+import { env } from "../../config/env.js";
 import { AppError } from "../../lib/errors.js";
 import { validateBody, validateQuery } from "../../middleware/validate.js";
 import { authenticate } from "../../middleware/authenticate.js";
@@ -11,11 +13,13 @@ import {
   patchBotSchema,
   createStaffSchema,
   grantAccessSchema,
+  impersonateUserSchema,
   listQuerySchema,
   patchPlatformCreatorSchema,
   patchStaffSchema,
   revokeAccessSchema,
 } from "./platform.schemas.js";
+import { impersonateOrganizationMember } from "./platform-impersonate.service.js";
 import {
   billingOverview,
   createStaff,
@@ -152,6 +156,41 @@ platformRoutes.post(
           req.auth.sub,
         ),
       );
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+function mayReturnRefreshInBody(req: Request): boolean {
+  if (!env.PORTAL_BFF_SECRET) return true;
+  const header = req.headers["x-portal-bff-secret"];
+  const value = Array.isArray(header) ? header[0] : header;
+  return typeof value === "string" && value === env.PORTAL_BFF_SECRET;
+}
+
+platformRoutes.post(
+  "/users/:userId/impersonate",
+  requirePlatform("SUPERADMIN"),
+  validateBody(impersonateUserSchema),
+  async (req, res, next) => {
+    try {
+      if (!req.auth?.sub) {
+        throw new AppError("UNAUTHORIZED", "Missing access token", 401);
+      }
+      const result = await impersonateOrganizationMember({
+        actorUserId: req.auth.sub,
+        targetUserId: String(req.params.userId),
+        organizationId: req.body.organizationId,
+      });
+      if (!mayReturnRefreshInBody(req)) {
+        throw new AppError(
+          "FORBIDDEN",
+          "Impersonation tokens are only issued to the portal BFF",
+          403,
+        );
+      }
+      res.json(result);
     } catch (err) {
       next(err);
     }

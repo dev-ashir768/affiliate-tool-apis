@@ -38,6 +38,10 @@ export const revokeAccessSchema = z.object({
   note: z.string().trim().max(500).optional(),
 });
 
+export const impersonateUserSchema = z.object({
+  organizationId: z.string().trim().min(1),
+});
+
 export const createPlatformCreatorSchema = z.object({
   organizationId: z.string().min(1),
   handle: z.string().trim().min(1).max(100),
