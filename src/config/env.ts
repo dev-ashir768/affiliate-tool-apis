@@ -51,6 +51,7 @@ const schema = z.object({
   PAST_DUE_GRACE_DAYS: z.coerce.number().int().min(0).max(30).default(3),
   ACCESS_TOKEN_TTL_SEC: z.coerce.number().default(900),
   REFRESH_TOKEN_TTL_SEC: z.coerce.number().default(604800),
+  MFA_PENDING_TTL_SEC: z.coerce.number().int().positive().default(600),
   CORS_ORIGINS: z.string().default("http://localhost:3000"),
   /** Public portal URL for Stripe checkout return URLs and email links (no trailing slash). */
   PORTAL_BASE_URL: z.preprocess(
