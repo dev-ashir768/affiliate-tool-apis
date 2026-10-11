@@ -4,6 +4,7 @@ import { env } from "../../config/env.js";
 import { randomBytes } from "node:crypto";
 import { decryptVault, encryptVault, sha256 } from "../../lib/crypto.js";
 import { writeAuditLog } from "../../lib/audit.js";
+import { logger } from "../../lib/logger.js";
 import {
   buildOtpauthUrl,
   generateBackupCodes,
@@ -58,7 +59,14 @@ export async function confirmTotpSetup(userId: string, code: string) {
       data: hashes.map((codeHash) => ({ userId, codeHash })),
     });
   });
-  await deletePendingTotpSecret(userId);
+  try {
+    await deletePendingTotpSecret(userId);
+  } catch (err) {
+    logger.warn("2fa setup: failed to delete pending TOTP secret", {
+      userId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 
   const { claims, platformMembership } = await resolveAccessClaims(userId);
   const session = await issueSession(claims);
@@ -256,8 +264,16 @@ export async function adminResetTwoFactor(
       data: { revokedAt: new Date() },
     }),
   ]);
-  await deletePendingTotpSecret(targetUserId);
+  // Revoke sessions first; Redis cleanup is best-effort and must not block it.
   await revokeAllRefreshForUser(targetUserId);
+  try {
+    await deletePendingTotpSecret(targetUserId);
+  } catch (err) {
+    logger.warn("2fa admin reset: failed to delete pending TOTP secret", {
+      targetUserId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 
   void writeAuditLog({
     actorUserId,

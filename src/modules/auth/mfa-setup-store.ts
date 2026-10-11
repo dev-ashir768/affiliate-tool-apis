@@ -3,6 +3,11 @@ import { decryptVault, encryptVault } from "../../lib/crypto.js";
 
 const KEY_PREFIX = "mfa-setup:";
 
+/** Fresh, widened read: status mutates across awaits, so TS narrowing is stale. */
+function redisStatus(): string {
+  return redis.status;
+}
+
 async function requireRedis(): Promise<void> {
   if (redis.status === "ready") return;
 
@@ -56,7 +61,7 @@ async function requireRedis(): Promise<void> {
     }
   }
 
-  if (redis.status !== "ready") {
+  if (redisStatus() !== "ready") {
     throw new Error("Redis unavailable");
   }
 }
