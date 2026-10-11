@@ -5,6 +5,7 @@ import { AppError } from "../../lib/errors.js";
 import { logger } from "../../lib/logger.js";
 import { validateBody } from "../../middleware/validate.js";
 import { authenticate } from "../../middleware/authenticate.js";
+import { authenticateMfaPending } from "../../middleware/authenticate-mfa-pending.js";
 import {
   isTrustedBff,
   rateLimit,
@@ -17,6 +18,7 @@ import {
   refreshSchema,
   registerSchema,
   resetPasswordSchema,
+  totpCodeSchema,
 } from "./auth.schemas.js";
 import { verifyAccessTokenAllowExpired } from "../../lib/tokens.js";
 import {
@@ -29,6 +31,7 @@ import {
   rotateRefresh,
 } from "./auth.service.js";
 import { refreshTtl } from "./refresh-store.js";
+import { confirmTotpSetup, startTotpSetup } from "./two-factor.service.js";
 
 export const authRoutes = Router();
 
@@ -70,6 +73,12 @@ const limitReset = rateLimit({
   key: rateLimitKey("auth-reset"),
   limit: 10,
   windowSec: 15 * 60,
+  failClosed: true,
+});
+const limitTotpSetup = rateLimit({
+  key: rateLimitKey("auth-2fa-setup"),
+  limit: 5,
+  windowSec: 60,
   failClosed: true,
 });
 // Refresh runs on navigations; fail open so a Redis blip never logs users out.
@@ -291,6 +300,45 @@ authRoutes.post(
     try {
       const result = await resetPassword(req.body);
       res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+authRoutes.post(
+  "/2fa/setup/start",
+  limitTotpSetup,
+  authenticateMfaPending,
+  async (req, res, next) => {
+    try {
+      const result = await startTotpSetup(req.mfaUserId!);
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+authRoutes.post(
+  "/2fa/setup/confirm",
+  limitTotpSetup,
+  authenticateMfaPending,
+  validateBody(totpCodeSchema),
+  async (req, res, next) => {
+    try {
+      const result = await confirmTotpSetup(req.mfaUserId!, req.body.code);
+      clearMfaPendingCookie(res);
+      setRefreshCookie(res, result.refreshToken);
+      res.json({
+        status: result.status,
+        backupCodes: result.backupCodes,
+        user: result.user,
+        organizationId: result.organizationId,
+        platformMembership: result.platformMembership,
+        redirectTo: result.redirectTo,
+        ...authTokenPayload(req, result),
+      });
     } catch (err) {
       next(err);
     }

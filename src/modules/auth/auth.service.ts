@@ -1,8 +1,3 @@
-import type {
-  MembershipRole,
-  PlatformRole,
-  PlatformMembershipStatus,
-} from "@prisma/client";
 import { randomBytes } from "node:crypto";
 import { prisma } from "../../lib/prisma.js";
 import { AppError } from "../../lib/errors.js";
@@ -14,6 +9,11 @@ import {
   type AccessClaims,
 } from "../../lib/tokens.js";
 import { subscriptionGrantsAccess } from "../../lib/entitlements.js";
+import {
+  redirectFor,
+  resolveAccessClaims,
+  type PlatformMembershipSummary,
+} from "./auth-claims.js";
 import { sha256 } from "../../lib/crypto.js";
 import { env } from "../../config/env.js";
 import { portalBaseUrl } from "../../lib/portal-base-url.js";
@@ -50,84 +50,6 @@ function slugify(name: string) {
     "-" +
     Math.random().toString(36).slice(2, 8)
   );
-}
-
-function redirectFor(
-  platformRole: AccessClaims["platformRole"],
-  hasProductAccess: boolean,
-): string {
-  if (platformRole) return "/backoffice/users";
-  return hasProductAccess ? "/home" : "/onboarding";
-}
-
-type PlatformMembershipSummary = {
-  role: PlatformRole;
-  status: PlatformMembershipStatus;
-} | null;
-
-async function resolveAccessClaims(
-  userId: string,
-  preferredOrgId?: string | null,
-): Promise<{
-  claims: AccessClaims;
-  platformMembership: PlatformMembershipSummary;
-}> {
-  const platform = await prisma.platformMembership.findFirst({
-    where: { userId, status: "ACTIVE" },
-  });
-
-  // Strict area isolation: platform staff sessions never carry org context.
-  // Merchants never get platformRole. One account = one work area.
-  if (platform) {
-    return {
-      claims: {
-        sub: userId,
-        orgId: null,
-        orgRole: null,
-        platformRole: platform.role as PlatformRole,
-        hasProductAccess: false,
-      },
-      platformMembership: { role: platform.role, status: platform.status },
-    };
-  }
-
-  let membership =
-    preferredOrgId != null
-      ? await prisma.membership.findFirst({
-          where: {
-            userId,
-            organizationId: preferredOrgId,
-            status: "ACTIVE",
-          },
-        })
-      : null;
-
-  if (!membership) {
-    membership = await prisma.membership.findFirst({
-      where: { userId, status: "ACTIVE" },
-      orderBy: { createdAt: "asc" },
-    });
-  }
-
-  if (!membership) {
-    throw new AppError("FORBIDDEN", "No active organization", 403);
-  }
-
-  const org = await prisma.organization.findUnique({
-    where: { id: membership.organizationId },
-    include: { subscription: true },
-  });
-
-  return {
-    claims: {
-      sub: userId,
-      orgId: membership.organizationId,
-      orgRole: membership.role as MembershipRole,
-      platformRole: null,
-      hasProductAccess: subscriptionGrantsAccess(org?.subscription),
-    },
-    platformMembership: null,
-  };
 }
 
 export async function issueSession(claims: AccessClaims) {

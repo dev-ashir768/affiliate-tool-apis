@@ -24,3 +24,16 @@ export const resetPasswordSchema = z.object({
   token: z.string().min(1),
   password: z.string().min(8),
 });
+
+export const totpCodeSchema = z.object({
+  code: z.string().trim().min(6).max(32),
+});
+
+export const verifyTotpSchema = z.object({
+  code: z.string().trim().min(6).max(32),
+  rememberDevice: z.boolean().optional(),
+});
+
+export const adminResetTotpSchema = z.object({
+  userId: z.string().min(1),
+});

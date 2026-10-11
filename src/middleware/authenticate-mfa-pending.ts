@@ -10,13 +10,22 @@ declare global {
   }
 }
 
+/** Bearer from Authorization (BFF); falls back to the mfa_pending cookie (portal). */
+function mfaPendingTokenFrom(req: {
+  headers: { authorization?: string };
+  cookies?: Record<string, string>;
+}): string | null {
+  const header = req.headers.authorization;
+  if (header?.startsWith("Bearer ")) return header.slice(7).trim() || null;
+  const cookie = req.cookies?.mfa_pending;
+  return typeof cookie === "string" && cookie ? cookie : null;
+}
+
 export const authenticateMfaPending: RequestHandler = async (req, _res, next) => {
   try {
-    const header = req.headers.authorization;
-    if (!header?.startsWith("Bearer ")) {
-      throw new AppError("UNAUTHORIZED", "Missing MFA pending token", 401);
-    }
-    const { sub } = await verifyMfaPendingToken(header.slice(7).trim());
+    const token = mfaPendingTokenFrom(req);
+    if (!token) throw new Error("Missing MFA pending token");
+    const { sub } = await verifyMfaPendingToken(token);
     req.mfaUserId = sub;
     next();
   } catch {
