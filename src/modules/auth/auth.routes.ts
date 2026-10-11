@@ -163,7 +163,7 @@ function rawRefreshFromRequest(req: {
   return raw;
 }
 
-/** Sets the mfa_pending cookie; JSON carries the token only for the trusted BFF. */
+/** Sets the mfa_pending cookie; JSON carries the token when mayReturnRefreshInBody (same gate as refreshToken). */
 function sendMfaChallenge(
   req: Request,
   res: Response,
@@ -180,7 +180,7 @@ function sendMfaChallenge(
     status: result.status,
     user: result.user,
     ...extra,
-    ...(isTrustedBff(req) ? { mfaPendingToken: result.mfaPendingToken } : {}),
+    ...(mayReturnRefreshInBody(req) ? { mfaPendingToken: result.mfaPendingToken } : {}),
   });
 }
 
