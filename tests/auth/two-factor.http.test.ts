@@ -451,4 +451,181 @@ describe("2FA setup HTTP", () => {
       expect(statuses[5]).toBe(429);
     });
   });
-});
+
+  describe("status, regenerate, admin reset", () => {
+    function authz(ip: string, token: string) {
+      return { ...bffHeaders(ip), Authorization: `Bearer ${token}` };
+    }
+
+    /** A SUPERADMIN with TOTP, logged in through the full challenge. */
+    async function superadminToken(ip: string) {
+      const { email, secret } = await registerWithTotp(ip);
+      const user = await prisma.user.findUniqueOrThrow({ where: { email } });
+      await prisma.platformMembership.create({
+        data: { userId: user.id, role: "SUPERADMIN", status: "ACTIVE" },
+      });
+      const challenge = await loginChallenge(ip, email);
+      const res = await verifyReq(ip, challenge.body.mfaPendingToken).send({
+        code: authenticator.generate(secret),
+      });
+      expect(res.status).toBe(200);
+      return res.body.accessToken as string;
+    }
+
+    it("status reports enabled and remaining backup codes", async () => {
+      const ip = randomIp();
+      const { accessToken, backupCodes, email } = await registerWithTotp(ip);
+      const res = await request(app).get("/api/v1/auth/2fa/status").set(authz(ip, accessToken));
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({
+        enabled: true,
+        backupCodesRemaining: 10,
+        trustedDevices: [],
+      });
+
+      const challenge = await loginChallenge(ip, email);
+      await verifyReq(ip, challenge.body.mfaPendingToken).send({ code: backupCodes[0] });
+      const after = await request(app).get("/api/v1/auth/2fa/status").set(authz(ip, accessToken));
+      expect(after.body.backupCodesRemaining).toBe(9);
+    });
+
+    it("regenerate with valid TOTP replaces all backup codes", async () => {
+      const ip = randomIp();
+      const { accessToken, secret, backupCodes, email } = await registerWithTotp(ip);
+      const res = await request(app)
+        .post("/api/v1/auth/2fa/backup-codes/regenerate")
+        .set(authz(ip, accessToken))
+        .send({ code: authenticator.generate(secret) });
+      expect(res.status).toBe(200);
+      expect(res.body.backupCodes).toHaveLength(10);
+      expect(new Set(res.body.backupCodes).size).toBe(10);
+      expect(res.body.backupCodes.some((c: string) => backupCodes.includes(c))).toBe(false);
+
+      const user = await prisma.user.findUniqueOrThrow({ where: { email } });
+      expect(await prisma.twoFactorBackupCode.count({ where: { userId: user.id } })).toBe(10);
+
+      // Old code no longer works, a new one does.
+      const c1 = await loginChallenge(ip, email);
+      const old = await verifyReq(ip, c1.body.mfaPendingToken).send({ code: backupCodes[0] });
+      expect(old.status).toBe(401);
+      const fresh = await verifyReq(ip, c1.body.mfaPendingToken).send({
+        code: res.body.backupCodes[0],
+      });
+      expect(fresh.status).toBe(200);
+    });
+
+    it("regenerate rejects a wrong code, a backup code, and no auth; keeps existing codes", async () => {
+      const ip = randomIp();
+      const { accessToken, secret, backupCodes, email } = await registerWithTotp(ip);
+      const good = authenticator.generate(secret);
+      const bad = good === "000000" ? "000001" : "000000";
+      const url = "/api/v1/auth/2fa/backup-codes/regenerate";
+
+      const wrong = await request(app).post(url).set(authz(ip, accessToken)).send({ code: bad });
+      expect(wrong.status).toBe(401);
+      const viaBackup = await request(app)
+        .post(url)
+        .set(authz(ip, accessToken))
+        .send({ code: backupCodes[0] });
+      expect(viaBackup.status).toBe(401);
+      const anon = await request(app).post(url).set(bffHeaders(ip)).send({ code: good });
+      expect(anon.status).toBe(401);
+
+      const user = await prisma.user.findUniqueOrThrow({ where: { email } });
+      expect(
+        await prisma.twoFactorBackupCode.count({ where: { userId: user.id, usedAt: null } }),
+      ).toBe(10);
+    });
+
+    it("superadmin reset clears 2FA, revokes devices and refresh tokens, audits; target must re-enroll", async () => {
+      const ip = randomIp();
+      const adminToken = await superadminToken(ip);
+
+      const target = await registerWithTotp(ip);
+      const user = await prisma.user.findUniqueOrThrow({ where: { email: target.email } });
+      const challenge = await loginChallenge(ip, target.email);
+      const verified = await verifyReq(ip, challenge.body.mfaPendingToken).send({
+        code: authenticator.generate(target.secret),
+        rememberDevice: true,
+      });
+      expect(verified.status).toBe(200);
+      const trusted = liveCookie(setCookies(verified), "trusted_device")!;
+      expect(trusted).toBeTruthy();
+      expect(
+        await prisma.refreshToken.count({ where: { userId: user.id, revokedAt: null } }),
+      ).toBeGreaterThan(0);
+
+      const res = await request(app)
+        .post("/api/v1/auth/2fa/admin/reset")
+        .set(authz(ip, adminToken))
+        .send({ userId: user.id });
+      expect(res.status).toBe(204);
+
+      const after = await prisma.user.findUniqueOrThrow({ where: { id: user.id } });
+      expect(after.totpEnabled).toBe(false);
+      expect(after.totpSecretEncrypted).toBeNull();
+      expect(after.totpVerifiedAt).toBeNull();
+      expect(await prisma.twoFactorBackupCode.count({ where: { userId: user.id } })).toBe(0);
+      const devices = await prisma.trustedDevice.findMany({ where: { userId: user.id } });
+      expect(devices.length).toBeGreaterThan(0);
+      expect(devices.every((d) => d.revokedAt !== null)).toBe(true);
+      expect(
+        await prisma.refreshToken.count({ where: { userId: user.id, revokedAt: null } }),
+      ).toBe(0);
+
+      // Trusted device no longer skips; user is sent back to enrollment.
+      const relogin = await loginChallenge(ip, target.email, `trusted_device=${trusted}`);
+      expect(relogin.body.status).toBe("mfa_setup");
+
+      const audit = await prisma.auditLog.findFirst({
+        where: { action: "auth.2fa.admin_reset", entityId: user.id },
+      });
+      expect(audit).toBeTruthy();
+      expect(audit!.actorUserId).not.toBe(user.id);
+      await prisma.auditLog.deleteMany({ where: { action: "auth.2fa.admin_reset", entityId: user.id } });
+    });
+
+    it("admin reset: non-superadmin 403, unauthenticated 401, unknown user 404, bad body 400", async () => {
+      const ip = randomIp();
+      const merchant = await registerWithTotp(ip);
+      const url = "/api/v1/auth/2fa/admin/reset";
+
+      const forbidden = await request(app)
+        .post(url)
+        .set(authz(ip, merchant.accessToken))
+        .send({ userId: "whatever" });
+      expect(forbidden.status).toBe(403);
+
+      // OPS staff is not enough either.
+      const opsIp = randomIp();
+      const ops = await registerWithTotp(opsIp);
+      const opsUser = await prisma.user.findUniqueOrThrow({ where: { email: ops.email } });
+      await prisma.platformMembership.create({
+        data: { userId: opsUser.id, role: "OPS", status: "ACTIVE" },
+      });
+      const opsChallenge = await loginChallenge(opsIp, ops.email);
+      const opsVerified = await verifyReq(opsIp, opsChallenge.body.mfaPendingToken).send({
+        code: authenticator.generate(ops.secret),
+      });
+      const opsRes = await request(app)
+        .post(url)
+        .set(authz(opsIp, opsVerified.body.accessToken))
+        .send({ userId: opsUser.id });
+      expect(opsRes.status).toBe(403);
+      expect(
+        (await prisma.user.findUniqueOrThrow({ where: { id: opsUser.id } })).totpEnabled,
+      ).toBe(true);
+
+      const anon = await request(app).post(url).set(bffHeaders(ip)).send({ userId: "x" });
+      expect(anon.status).toBe(401);
+
+      const adminToken = await superadminToken(randomIp());
+      const missing = await request(app)
+        .post(url)
+        .set(authz(ip, adminToken))
+        .send({ userId: "does-not-exist" });
+      expect(missing.status).toBe(404);
+      const badBody = await request(app).post(url).set(authz(ip, adminToken)).send({});
+      expect(badBody.status).toBe(400);
+    });
+  });});

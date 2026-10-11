@@ -13,6 +13,7 @@ import {
   rateLimitKey,
 } from "../../middleware/rate-limit.js";
 import {
+  adminResetTotpSchema,
   forgotPasswordSchema,
   loginSchema,
   refreshSchema,
@@ -32,9 +33,12 @@ import {
   rotateRefresh,
 } from "./auth.service.js";
 import { refreshTtl } from "./refresh-store.js";
+import { requirePlatform } from "../../middleware/require-platform.js";
 import {
+  adminResetTwoFactor,
   confirmTotpSetup,
   getTwoFactorStatus,
+  regenerateBackupCodes,
   revokeTrustedDevice,
   startTotpSetup,
   TRUSTED_DEVICE_TTL_MS,
@@ -91,6 +95,12 @@ const limitTotpSetup = rateLimit({
 });
 const limitTotpVerify = rateLimit({
   key: rateLimitKey("auth-2fa-verify"),
+  limit: 5,
+  windowSec: 60,
+  failClosed: true,
+});
+const limitTotpRegenerate = rateLimit({
+  key: rateLimitKey("auth-2fa-regenerate"),
   limit: 5,
   windowSec: 60,
   failClosed: true,
@@ -421,3 +431,38 @@ authRoutes.delete("/2fa/trusted-devices/:id", authenticate, async (req, res, nex
     next(err);
   }
 });
+authRoutes.post(
+  "/2fa/backup-codes/regenerate",
+  limitTotpRegenerate,
+  authenticate,
+  validateBody(totpCodeSchema),
+  async (req, res, next) => {
+    try {
+      if (!req.auth) {
+        throw new AppError("UNAUTHORIZED", "Missing access token", 401);
+      }
+      const backupCodes = await regenerateBackupCodes(req.auth.sub, req.body.code);
+      res.json({ backupCodes });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+authRoutes.post(
+  "/2fa/admin/reset",
+  authenticate,
+  requirePlatform("SUPERADMIN"),
+  validateBody(adminResetTotpSchema),
+  async (req, res, next) => {
+    try {
+      if (!req.auth) {
+        throw new AppError("UNAUTHORIZED", "Missing access token", 401);
+      }
+      await adminResetTwoFactor(req.auth.sub, req.body.userId);
+      res.status(204).send();
+    } catch (err) {
+      next(err);
+    }
+  }
+);

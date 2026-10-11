@@ -12,7 +12,7 @@ import {
   verifyTotpCode,
 } from "../../lib/totp.js";
 import { redirectFor, resolveAccessClaims } from "./auth-claims.js";
-import { issueSession } from "./auth.service.js";
+import { issueSession, revokeAllRefreshForUser } from "./auth.service.js";
 import {
   deletePendingTotpSecret,
   getPendingTotpSecret,
@@ -200,4 +200,70 @@ export async function getTwoFactorStatus(userId: string) {
     listTrustedDevices(userId),
   ]);
   return { enabled: user.totpEnabled, backupCodesRemaining, trustedDevices };
+}
+export async function regenerateBackupCodes(
+  userId: string,
+  totpCode: string,
+): Promise<string[]> {
+  const user = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
+  if (!user.totpEnabled || !user.totpSecretEncrypted) {
+    throw new AppError("FORBIDDEN", "Two-factor authentication is not enabled", 403);
+  }
+  // TOTP only: a backup code must not be able to mint a fresh set of backup codes.
+  if (!verifyTotpCode(decryptVault(user.totpSecretEncrypted), totpCode)) {
+    throw new AppError("UNAUTHORIZED", "Invalid verification code", 401);
+  }
+
+  const { raw, hashes } = generateBackupCodes();
+  await prisma.$transaction([
+    prisma.twoFactorBackupCode.deleteMany({ where: { userId } }),
+    prisma.twoFactorBackupCode.createMany({
+      data: hashes.map((codeHash) => ({ userId, codeHash })),
+    }),
+  ]);
+
+  void writeAuditLog({
+    actorUserId: userId,
+    action: "auth.2fa.backup_codes_regenerated",
+    entityType: "User",
+    entityId: userId,
+  });
+  return raw;
+}
+
+export async function adminResetTwoFactor(
+  actorUserId: string,
+  targetUserId: string,
+): Promise<void> {
+  const target = await prisma.user.findUnique({
+    where: { id: targetUserId },
+    select: { id: true },
+  });
+  if (!target) throw new AppError("NOT_FOUND", "User not found", 404);
+
+  await prisma.$transaction([
+    prisma.user.update({
+      where: { id: targetUserId },
+      data: {
+        totpEnabled: false,
+        totpSecretEncrypted: null,
+        totpVerifiedAt: null,
+      },
+    }),
+    prisma.twoFactorBackupCode.deleteMany({ where: { userId: targetUserId } }),
+    prisma.trustedDevice.updateMany({
+      where: { userId: targetUserId, revokedAt: null },
+      data: { revokedAt: new Date() },
+    }),
+  ]);
+  await deletePendingTotpSecret(targetUserId);
+  await revokeAllRefreshForUser(targetUserId);
+
+  void writeAuditLog({
+    actorUserId,
+    action: "auth.2fa.admin_reset",
+    entityType: "User",
+    entityId: targetUserId,
+    meta: { targetUserId },
+  });
 }
