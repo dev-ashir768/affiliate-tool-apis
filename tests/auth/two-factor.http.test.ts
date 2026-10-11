@@ -512,6 +512,11 @@ describe("2FA setup HTTP", () => {
         code: res.body.backupCodes[0],
       });
       expect(fresh.status).toBe(200);
+
+      const audit = await prisma.auditLog.findFirst({
+        where: { action: "auth.2fa.backup_codes_regenerated", entityId: user.id },
+      });
+      expect(audit).toBeTruthy();
     });
 
     it("regenerate rejects a wrong code, a backup code, and no auth; keeps existing codes", async () => {
