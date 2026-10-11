@@ -68,6 +68,9 @@ export async function signAccessToken(claims: AccessClaims): Promise<string> {
 }
 
 function claimsFromPayload(payload: JWTPayload): AccessClaims {
+  if (payload.purpose != null) {
+    throw new Error("Invalid access token");
+  }
   return {
     sub: String(payload.sub),
     orgId: payload.orgId == null ? null : String(payload.orgId),
@@ -82,6 +85,27 @@ export async function verifyAccessToken(token: string): Promise<AccessClaims> {
     algorithms: [algorithm()],
   });
   return claimsFromPayload(payload);
+}
+
+export async function signMfaPendingToken(userId: string): Promise<string> {
+  return new SignJWT({ purpose: "mfa_pending" })
+    .setProtectedHeader({ alg: algorithm() })
+    .setSubject(userId)
+    .setIssuedAt()
+    .setExpirationTime(`${env.MFA_PENDING_TTL_SEC}s`)
+    .sign(await getSigningKey());
+}
+
+export async function verifyMfaPendingToken(
+  token: string,
+): Promise<{ sub: string }> {
+  const { payload } = await jwtVerify(token, await getVerifyKey(), {
+    algorithms: [algorithm()],
+  });
+  if (payload.purpose !== "mfa_pending" || !payload.sub) {
+    throw new Error("Invalid mfa pending token");
+  }
+  return { sub: String(payload.sub) };
 }
 
 /**
