@@ -10,6 +10,7 @@ import { hashPassword, verifyPassword } from "../../lib/password.js";
 import {
   generateRefreshToken,
   signAccessToken,
+  signMfaPendingToken,
   type AccessClaims,
 } from "../../lib/tokens.js";
 import { subscriptionGrantsAccess } from "../../lib/entitlements.js";
@@ -202,15 +203,11 @@ export async function register(input: {
     organizationName: result.organization.name,
   });
 
-  const session = await issueSession({
-    sub: result.user.id,
-    orgId: result.organization.id,
-    orgRole: "OWNER",
-    platformRole: null,
-    hasProductAccess: false,
-  });
+  const mfaPendingToken = await signMfaPendingToken(result.user.id);
 
   return {
+    status: "mfa_setup" as const,
+    mfaPendingToken,
     user: {
       id: result.user.id,
       email: result.user.email,
@@ -221,13 +218,35 @@ export async function register(input: {
       name: result.organization.name,
       slug: result.organization.slug,
     },
-    platformMembership: null,
-    redirectTo: redirectFor(null, false),
-    ...session,
   };
 }
 
-export async function login(input: { email: string; password: string }) {
+/**
+ * Whether `raw` is a live (unrevoked, unexpired) trusted-device token for the
+ * user. The raw value is never stored; lookup is by sha256.
+ */
+export async function findValidTrustedDevice(
+  userId: string,
+  raw: string,
+): Promise<boolean> {
+  if (!raw) return false;
+  const device = await prisma.trustedDevice.findFirst({
+    where: {
+      userId,
+      tokenHash: sha256(raw),
+      revokedAt: null,
+      expiresAt: { gt: new Date() },
+    },
+    select: { id: true },
+  });
+  return Boolean(device);
+}
+
+export async function login(input: {
+  email: string;
+  password: string;
+  trustedDeviceRaw?: string | null;
+}) {
   const email = input.email.toLowerCase().trim();
   const user = await prisma.user.findUnique({ where: { email } });
   if (!user || !(await verifyPassword(user.passwordHash, input.password))) {
@@ -237,27 +256,60 @@ export async function login(input: { email: string; password: string }) {
     throw new AppError("FORBIDDEN", "Account is disabled", 403);
   }
 
-  const { claims, platformMembership } = await resolveAccessClaims(user.id);
-  const session = await issueSession(claims);
+  const challengeUser = { id: user.id, email: user.email, name: user.name };
 
-  void writeAuditLog({
-    actorUserId: user.id,
-    organizationId: claims.orgId,
-    action: "auth.login",
-    entityType: "User",
-    entityId: user.id,
-    meta: {
-      platformRole: claims.platformRole,
-      hasProductAccess: claims.hasProductAccess,
-    },
-  });
+  if (!user.totpEnabled) {
+    const mfaPendingToken = await signMfaPendingToken(user.id);
+    return {
+      status: "mfa_setup" as const,
+      mfaPendingToken,
+      user: challengeUser,
+    };
+  }
 
+  // Staff must always complete a TOTP challenge; trusted devices never skip it.
+  const isStaff = Boolean(
+    await prisma.platformMembership.findFirst({
+      where: { userId: user.id, status: "ACTIVE" },
+    }),
+  );
+
+  if (
+    !isStaff &&
+    input.trustedDeviceRaw &&
+    (await findValidTrustedDevice(user.id, input.trustedDeviceRaw))
+  ) {
+    const { claims, platformMembership } = await resolveAccessClaims(user.id);
+    const session = await issueSession(claims);
+
+    void writeAuditLog({
+      actorUserId: user.id,
+      organizationId: claims.orgId,
+      action: "auth.login",
+      entityType: "User",
+      entityId: user.id,
+      meta: {
+        platformRole: claims.platformRole,
+        hasProductAccess: claims.hasProductAccess,
+        trustedDevice: true,
+      },
+    });
+
+    return {
+      status: "authenticated" as const,
+      user: challengeUser,
+      organizationId: claims.orgId,
+      platformMembership,
+      redirectTo: redirectFor(claims.platformRole, claims.hasProductAccess),
+      ...session,
+    };
+  }
+
+  const mfaPendingToken = await signMfaPendingToken(user.id);
   return {
-    user: { id: user.id, email: user.email, name: user.name },
-    organizationId: claims.orgId,
-    platformMembership,
-    redirectTo: redirectFor(claims.platformRole, claims.hasProductAccess),
-    ...session,
+    status: "mfa_required" as const,
+    mfaPendingToken,
+    user: challengeUser,
   };
 }
 

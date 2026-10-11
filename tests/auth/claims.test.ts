@@ -32,7 +32,7 @@ describe("AccessClaims", () => {
   });
 });
 
-describe("staff login claims", () => {
+describe("staff login challenge", () => {
   const staffEmail = `staff_${Date.now()}@platform.test`;
   const password = "Secret123!";
   let argon2Available = true;
@@ -56,7 +56,7 @@ describe("staff login claims", () => {
     }
   });
 
-  it("issues platformRole for SUPERADMIN without requiring org", async (ctx) => {
+  it("gates SUPERADMIN login behind an MFA challenge", async (ctx) => {
     try {
       ({ hashPassword } = await import("../../src/lib/password.js"));
       ({ prisma } = await import("../../src/lib/prisma.js"));
@@ -89,15 +89,23 @@ describe("staff login claims", () => {
       },
     });
 
-    const session = await login({ email: staffEmail, password });
-    const claims = await verifyAccessToken(session.accessToken);
-    expect(claims.platformRole).toBe("SUPERADMIN");
-    expect(claims.orgId).toBeNull();
-    expect(claims.orgRole).toBeNull();
-    expect(session.redirectTo).toBe("/backoffice/users");
-    expect(session.platformMembership).toEqual({
-      role: "SUPERADMIN",
-      status: "ACTIVE",
+    // Challenge-first: staff get no session until TOTP is completed (Task 5+).
+    const challenge = await login({ email: staffEmail, password });
+    expect(challenge.status).toBe("mfa_setup");
+    expect(challenge).not.toHaveProperty("accessToken");
+    expect(challenge).not.toHaveProperty("refreshToken");
+
+    // Even with TOTP enabled, staff always get mfa_required (no trusted-device skip).
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { totpEnabled: true },
     });
+    const required = await login({
+      email: staffEmail,
+      password,
+      trustedDeviceRaw: "any-device",
+    });
+    expect(required.status).toBe("mfa_required");
+    expect(required).not.toHaveProperty("accessToken");
   }, 60000);
 });

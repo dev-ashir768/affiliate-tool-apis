@@ -94,6 +94,25 @@ function refreshCookieOptions(): CookieOptions {
   };
 }
 
+function mfaPendingCookieOptions(): CookieOptions {
+  return {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: cookieSecure(),
+    maxAge: env.MFA_PENDING_TTL_SEC * 1000,
+    path: "/",
+  };
+}
+
+function clearMfaPendingCookie(res: Response) {
+  res.clearCookie("mfa_pending", {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: cookieSecure(),
+    path: "/",
+  });
+}
+
 /**
  * Include refreshToken in JSON only for trusted portal BFF.
  * - PORTAL_BFF_SECRET unset: legacy behavior (return token; set secret in prod to lock down)
@@ -144,16 +163,32 @@ function rawRefreshFromRequest(req: {
   return raw;
 }
 
+/** Sets the mfa_pending cookie; JSON carries the token only for the trusted BFF. */
+function sendMfaChallenge(
+  req: Request,
+  res: Response,
+  statusCode: number,
+  result: {
+    status: "mfa_setup" | "mfa_required";
+    mfaPendingToken: string;
+    user: { id: string; email: string; name: string };
+  },
+  extra: Record<string, unknown> = {},
+) {
+  res.cookie("mfa_pending", result.mfaPendingToken, mfaPendingCookieOptions());
+  res.status(statusCode).json({
+    status: result.status,
+    user: result.user,
+    ...extra,
+    ...(isTrustedBff(req) ? { mfaPendingToken: result.mfaPendingToken } : {}),
+  });
+}
+
 authRoutes.post("/register", limitRegister, validateBody(registerSchema), async (req, res, next) => {
   try {
     const result = await register(req.body);
-    setRefreshCookie(res, result.refreshToken);
-    res.status(201).json({
-      user: result.user,
+    sendMfaChallenge(req, res, 201, result, {
       organization: result.organization,
-      platformMembership: result.platformMembership,
-      redirectTo: result.redirectTo,
-      ...authTokenPayload(req, result),
     });
   } catch (err) {
     next(err);
@@ -162,9 +197,16 @@ authRoutes.post("/register", limitRegister, validateBody(registerSchema), async 
 
 authRoutes.post("/login", limitLoginIp, validateBody(loginSchema), limitLoginEmail, async (req, res, next) => {
   try {
-    const result = await login(req.body);
+    const trustedDeviceRaw = req.cookies?.trusted_device as string | undefined;
+    const result = await login({ ...req.body, trustedDeviceRaw });
+    if (result.status !== "authenticated") {
+      sendMfaChallenge(req, res, 200, result);
+      return;
+    }
+    clearMfaPendingCookie(res);
     setRefreshCookie(res, result.refreshToken);
     res.json({
+      status: result.status,
       user: result.user,
       organizationId: result.organizationId,
       platformMembership: result.platformMembership,

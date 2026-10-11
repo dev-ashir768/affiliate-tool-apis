@@ -22,6 +22,38 @@ function bffHeaders() {
   return secret ? { "X-Portal-Bff-Secret": secret } : {};
 }
 
+/** Enable TOTP + a trusted device for the user, then log in over HTTP to get a real session. */
+async function loginViaTrustedDevice(
+  app: ReturnType<typeof createApp>,
+  email: string,
+  password: string,
+  asBff = true,
+) {
+  const user = await prisma.user.findUniqueOrThrow({ where: { email } });
+  await prisma.user.update({
+    where: { id: user.id },
+    data: { totpEnabled: true },
+  });
+  const raw = `td_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  await prisma.trustedDevice.create({
+    data: {
+      userId: user.id,
+      tokenHash: sha256(raw),
+      expiresAt: new Date(Date.now() + 60_000),
+    },
+  });
+  return request(app)
+    .post("/api/v1/auth/login")
+    .set(asBff ? bffHeaders() : {})
+    .set("Cookie", `trusted_device=${raw}`)
+    .send({ email, password });
+}
+
+function setCookies(res: { headers: Record<string, unknown> }): string[] {
+  const sc = res.headers["set-cookie"];
+  return Array.isArray(sc) ? (sc as string[]) : sc ? [String(sc)] : [];
+}
+
 describe("auth HTTP", () => {
   const email = `http_owner_${Date.now()}@test.com`;
   const password = "Secret123!";
@@ -57,12 +89,59 @@ describe("auth HTTP", () => {
       });
 
     expect(registerRes.status).toBe(201);
-    expect(registerRes.body.accessToken).toBeTruthy();
-    expect(registerRes.body.refreshToken).toBeTruthy();
-    expect(registerRes.headers["set-cookie"]).toBeDefined();
+    expect(registerRes.body.status).toBe("mfa_setup");
+    expect(registerRes.body.user.email).toBe(email);
+    expect(registerRes.body.accessToken).toBeUndefined();
+    expect(registerRes.body.refreshToken).toBeUndefined();
+    const registerCookies = setCookies(registerRes);
+    expect(registerCookies.some((c) => c.startsWith("mfa_pending="))).toBe(true);
+    expect(registerCookies.some((c) => c.startsWith("refresh_token="))).toBe(false);
+    if (env.PORTAL_BFF_SECRET) {
+      expect(registerRes.body.mfaPendingToken).toBeTruthy();
+    }
 
-    const accessToken = registerRes.body.accessToken as string;
-    const refreshToken = registerRes.body.refreshToken as string;
+    // Login without TOTP: same challenge, still no session.
+    const challengeRes = await request(app)
+      .post("/api/v1/auth/login")
+      .set(bffHeaders())
+      .send({ email, password });
+    expect(challengeRes.status).toBe(200);
+    expect(challengeRes.body.status).toBe("mfa_setup");
+    expect(challengeRes.body.accessToken).toBeUndefined();
+    expect(challengeRes.body.refreshToken).toBeUndefined();
+    expect(setCookies(challengeRes).some((c) => c.startsWith("refresh_token="))).toBe(false);
+
+    // Without BFF header the pending token must not be in the JSON body.
+    const noBffRes = await request(app)
+      .post("/api/v1/auth/login")
+      .send({ email, password });
+    expect(noBffRes.body.mfaPendingToken).toBeUndefined();
+    expect(setCookies(noBffRes).some((c) => c.startsWith("mfa_pending="))).toBe(true);
+
+    // TOTP enabled, no trusted device: mfa_required.
+    const user = await prisma.user.findUniqueOrThrow({ where: { email } });
+    await prisma.user.update({ where: { id: user.id }, data: { totpEnabled: true } });
+    const requiredRes = await request(app)
+      .post("/api/v1/auth/login")
+      .set(bffHeaders())
+      .send({ email, password });
+    expect(requiredRes.body.status).toBe("mfa_required");
+    expect(requiredRes.body.accessToken).toBeUndefined();
+    await prisma.user.update({ where: { id: user.id }, data: { totpEnabled: false } });
+
+    // Trusted device cookie skips the challenge and yields a real session.
+    const loginRes = await loginViaTrustedDevice(app, email, password);
+    expect(loginRes.status).toBe(200);
+    expect(loginRes.body.status).toBe("authenticated");
+    expect(loginRes.body.accessToken).toBeTruthy();
+    expect(loginRes.body.refreshToken).toBeTruthy();
+    expect(setCookies(loginRes).some((c) => c.startsWith("refresh_token="))).toBe(true);
+    expect(
+      setCookies(loginRes).some((c) => c.startsWith("mfa_pending=;")),
+    ).toBe(true);
+
+    const accessToken = loginRes.body.accessToken as string;
+    const refreshToken = loginRes.body.refreshToken as string;
 
     const meRes = await request(app)
       .get("/api/v1/auth/me")
@@ -145,9 +224,17 @@ describe("auth HTTP", () => {
       });
 
     expect(registerRes.status).toBe(201);
-    expect(registerRes.body.accessToken).toBeTruthy();
+    expect(registerRes.body.status).toBe("mfa_setup");
+    expect(registerRes.body.mfaPendingToken).toBeUndefined();
     expect(registerRes.body.refreshToken).toBeUndefined();
-    expect(registerRes.headers["set-cookie"]).toBeDefined();
+    expect(setCookies(registerRes).some((c) => c.startsWith("mfa_pending="))).toBe(true);
+
+    const loginRes = await loginViaTrustedDevice(app, emailNoBff, password, false);
+    expect(loginRes.status).toBe(200);
+    expect(loginRes.body.status).toBe("authenticated");
+    expect(loginRes.body.accessToken).toBeTruthy();
+    expect(loginRes.body.refreshToken).toBeUndefined();
+    expect(setCookies(loginRes).some((c) => c.startsWith("refresh_token="))).toBe(true);
 
     const user = await prisma.user.findUnique({ where: { email: emailNoBff } });
     if (user) {
@@ -177,14 +264,19 @@ describe("auth HTTP", () => {
       });
 
     expect(registerRes.status).toBe(201);
-    const staleRefresh = registerRes.body.refreshToken as string;
-    expect(registerRes.headers["set-cookie"]).toBeDefined();
+    expect(registerRes.body.status).toBe("mfa_setup");
 
-    // Rotate so register token is revoked; cookie carries the valid token
+    // Register no longer issues a session; get one via a trusted device.
+    const loginRes = await loginViaTrustedDevice(app, email2, password);
+    expect(loginRes.status).toBe(200);
+    const staleRefresh = loginRes.body.refreshToken as string;
+    expect(loginRes.headers["set-cookie"]).toBeDefined();
+
+    // Rotate so the login token is revoked; cookie carries the valid token
     const rotateRes = await request(app)
       .post("/api/v1/auth/refresh")
       .set(bffHeaders())
-      .set("Cookie", cookieHeaderFromSetCookie(registerRes.headers["set-cookie"]))
+      .set("Cookie", cookieHeaderFromSetCookie(loginRes.headers["set-cookie"]))
       .send({});
 
     expect(rotateRes.status).toBe(200);
