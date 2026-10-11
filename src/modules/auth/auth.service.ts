@@ -545,6 +545,11 @@ export async function resetPassword(input: {
       where: { userId: row.userId, usedAt: null, id: { not: row.id } },
       data: { usedAt: new Date() },
     });
+    // A reset implies possible compromise: no remembered device may skip TOTP.
+    await tx.trustedDevice.updateMany({
+      where: { userId: row.userId, revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
   });
   // Also drops the Redis mirror so revoked sessions cannot rotate.
   await revokeAllRefreshForUser(row.userId);

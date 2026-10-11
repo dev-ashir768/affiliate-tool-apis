@@ -19,6 +19,7 @@ import {
   registerSchema,
   resetPasswordSchema,
   totpCodeSchema,
+  verifyTotpSchema,
 } from "./auth.schemas.js";
 import { verifyAccessTokenAllowExpired } from "../../lib/tokens.js";
 import {
@@ -31,7 +32,14 @@ import {
   rotateRefresh,
 } from "./auth.service.js";
 import { refreshTtl } from "./refresh-store.js";
-import { confirmTotpSetup, startTotpSetup } from "./two-factor.service.js";
+import {
+  confirmTotpSetup,
+  getTwoFactorStatus,
+  revokeTrustedDevice,
+  startTotpSetup,
+  TRUSTED_DEVICE_TTL_MS,
+  verifyTotpLogin,
+} from "./two-factor.service.js";
 
 export const authRoutes = Router();
 
@@ -81,6 +89,12 @@ const limitTotpSetup = rateLimit({
   windowSec: 60,
   failClosed: true,
 });
+const limitTotpVerify = rateLimit({
+  key: rateLimitKey("auth-2fa-verify"),
+  limit: 5,
+  windowSec: 60,
+  failClosed: true,
+});
 // Refresh runs on navigations; fail open so a Redis blip never logs users out.
 const limitRefresh = rateLimit({
   key: rateLimitKey("auth-refresh"),
@@ -109,6 +123,16 @@ function mfaPendingCookieOptions(): CookieOptions {
     sameSite: "lax",
     secure: cookieSecure(),
     maxAge: env.MFA_PENDING_TTL_SEC * 1000,
+    path: "/",
+  };
+}
+
+function trustedDeviceCookieOptions(): CookieOptions {
+  return {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: cookieSecure(),
+    maxAge: TRUSTED_DEVICE_TTL_MS,
     path: "/",
   };
 }
@@ -344,3 +368,56 @@ authRoutes.post(
     }
   }
 );
+
+authRoutes.post(
+  "/2fa/verify",
+  limitTotpVerify,
+  authenticateMfaPending,
+  validateBody(verifyTotpSchema),
+  async (req, res, next) => {
+    try {
+      const result = await verifyTotpLogin(req.mfaUserId!, req.body.code, {
+        rememberDevice: req.body.rememberDevice,
+        userAgent: req.get("user-agent") ?? undefined,
+      });
+      clearMfaPendingCookie(res);
+      setRefreshCookie(res, result.refreshToken);
+      if (result.trustedDeviceRaw) {
+        res.cookie("trusted_device", result.trustedDeviceRaw, trustedDeviceCookieOptions());
+      }
+      res.json({
+        status: result.status,
+        user: result.user,
+        organizationId: result.organizationId,
+        platformMembership: result.platformMembership,
+        redirectTo: result.redirectTo,
+        ...authTokenPayload(req, result),
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+authRoutes.get("/2fa/status", authenticate, async (req, res, next) => {
+  try {
+    if (!req.auth) {
+      throw new AppError("UNAUTHORIZED", "Missing access token", 401);
+    }
+    res.json(await getTwoFactorStatus(req.auth.sub));
+  } catch (err) {
+    next(err);
+  }
+});
+
+authRoutes.delete("/2fa/trusted-devices/:id", authenticate, async (req, res, next) => {
+  try {
+    if (!req.auth) {
+      throw new AppError("UNAUTHORIZED", "Missing access token", 401);
+    }
+    await revokeTrustedDevice(req.auth.sub, String(req.params.id));
+    res.status(204).send();
+  } catch (err) {
+    next(err);
+  }
+});

@@ -5,6 +5,7 @@ import { createApp } from "../../src/app.js";
 import { prisma } from "../../src/lib/prisma.js";
 import { redis } from "../../src/lib/redis.js";
 import { env } from "../../src/config/env.js";
+import { sha256 } from "../../src/lib/crypto.js";
 
 const app = createApp();
 const password = "Secret123!";
@@ -50,12 +51,56 @@ function secretFromOtpauthUrl(url: string): string {
   return secret!;
 }
 
+/** Register + complete TOTP setup; returns what a later login/verify needs. */
+async function registerWithTotp(ip: string) {
+  const { email, token } = await registerUser(ip);
+  const auth = { ...bffHeaders(ip), Authorization: `Bearer ${token}` };
+  const startRes = await request(app).post("/api/v1/auth/2fa/setup/start").set(auth);
+  const secret = secretFromOtpauthUrl(startRes.body.otpauthUrl);
+  const confirmRes = await request(app)
+    .post("/api/v1/auth/2fa/setup/confirm")
+    .set(auth)
+    .send({ code: authenticator.generate(secret) });
+  expect(confirmRes.status).toBe(200);
+  return {
+    email,
+    secret,
+    backupCodes: confirmRes.body.backupCodes as string[],
+    accessToken: confirmRes.body.accessToken as string,
+  };
+}
+
+/** Password login; returns the MFA pending token (or the full response). */
+async function loginChallenge(ip: string, email: string, cookie?: string) {
+  const req = request(app)
+    .post("/api/v1/auth/login")
+    .set(bffHeaders(ip))
+    .send({ email, password });
+  const res = cookie ? await req.set("Cookie", cookie) : await req;
+  expect(res.status).toBe(200);
+  return res;
+}
+
+function verifyReq(ip: string, pendingToken: string) {
+  return request(app)
+    .post("/api/v1/auth/2fa/verify")
+    .set({ ...bffHeaders(ip), Authorization: `Bearer ${pendingToken}` });
+}
+
+function liveCookie(cookies: string[], name: string): string | undefined {
+  const c = cookies.find((x) => x.startsWith(`${name}=`) && !x.startsWith(`${name}=;`));
+  return c?.split(";")[0].slice(name.length + 1);
+}
+
 describe("2FA setup HTTP", () => {
   afterAll(async () => {
     for (const email of emails) {
       const user = await prisma.user.findUnique({ where: { email } });
       if (!user) continue;
       await prisma.refreshToken.deleteMany({ where: { userId: user.id } });
+      await prisma.trustedDevice.deleteMany({ where: { userId: user.id } });
+      await prisma.passwordResetToken.deleteMany({ where: { userId: user.id } });
+      await prisma.platformMembership.deleteMany({ where: { userId: user.id } });
       await prisma.twoFactorBackupCode.deleteMany({ where: { userId: user.id } });
       const memberships = await prisma.membership.findMany({
         where: { userId: user.id },
@@ -209,5 +254,201 @@ describe("2FA setup HTTP", () => {
     }
     expect(statuses.slice(0, 5).every((s) => s === 401)).toBe(true);
     expect(statuses[5]).toBe(429);
+  });
+
+  describe("verify + trusted devices", () => {
+    it("login -> verify with TOTP authenticates, clears mfa_pending, no trusted cookie by default", async () => {
+      const ip = randomIp();
+      const { email, secret } = await registerWithTotp(ip);
+
+      const challenge = await loginChallenge(ip, email);
+      expect(challenge.body.status).toBe("mfa_required");
+      expect(challenge.body.accessToken).toBeUndefined();
+
+      const res = await verifyReq(ip, challenge.body.mfaPendingToken).send({
+        code: authenticator.generate(secret),
+      });
+      expect(res.status).toBe(200);
+      expect(res.body.status).toBe("authenticated");
+      expect(res.body.accessToken).toBeTruthy();
+      expect(res.body.user.email).toBe(email);
+      expect(res.body.redirectTo).toBeTruthy();
+
+      const cookies = setCookies(res);
+      expect(liveCookie(cookies, "refresh_token")).toBeTruthy();
+      expect(cookies.some((c) => /^mfa_pending=;/.test(c))).toBe(true);
+      expect(liveCookie(cookies, "trusted_device")).toBeUndefined();
+    });
+
+    it("rejects a wrong code and requires a pending token", async () => {
+      const ip = randomIp();
+      const { email, secret } = await registerWithTotp(ip);
+      const challenge = await loginChallenge(ip, email);
+
+      const good = authenticator.generate(secret);
+      const bad = good === "000000" ? "000001" : "000000";
+      const badRes = await verifyReq(ip, challenge.body.mfaPendingToken).send({ code: bad });
+      expect(badRes.status).toBe(401);
+      expect(badRes.body.accessToken).toBeUndefined();
+
+      const noToken = await request(app)
+        .post("/api/v1/auth/2fa/verify")
+        .set(bffHeaders(ip))
+        .send({ code: good });
+      expect(noToken.status).toBe(401);
+    });
+
+    it("accepts a backup code once; reuse fails", async () => {
+      const ip = randomIp();
+      const { email, backupCodes } = await registerWithTotp(ip);
+      const code = backupCodes[0];
+
+      const first = await loginChallenge(ip, email);
+      const ok = await verifyReq(ip, first.body.mfaPendingToken).send({ code });
+      expect(ok.status).toBe(200);
+      expect(ok.body.status).toBe("authenticated");
+
+      const user = await prisma.user.findUniqueOrThrow({ where: { email } });
+      const used = await prisma.twoFactorBackupCode.count({
+        where: { userId: user.id, usedAt: { not: null } },
+      });
+      expect(used).toBe(1);
+
+      const second = await loginChallenge(ip, email);
+      const reuse = await verifyReq(ip, second.body.mfaPendingToken).send({ code });
+      expect(reuse.status).toBe(401);
+      expect(reuse.body.accessToken).toBeUndefined();
+
+      // A different, unused backup code still works.
+      const other = await verifyReq(ip, second.body.mfaPendingToken).send({
+        code: backupCodes[1].toUpperCase(),
+      });
+      expect(other.status).toBe(200);
+    });
+
+    it("rememberDevice sets trusted_device cookie for merchants; next login skips TOTP; revoke restores challenge", async () => {
+      const ip = randomIp();
+      const { email, secret, accessToken } = await registerWithTotp(ip);
+      const challenge = await loginChallenge(ip, email);
+
+      const res = await verifyReq(ip, challenge.body.mfaPendingToken)
+        .set("User-Agent", "vitest-device/1.0")
+        .send({ code: authenticator.generate(secret), rememberDevice: true });
+      expect(res.status).toBe(200);
+
+      const raw = liveCookie(setCookies(res), "trusted_device");
+      expect(raw).toBeTruthy();
+      const cookieHeader = setCookies(res).find((c) => c.startsWith("trusted_device="))!;
+      expect(cookieHeader).toMatch(/HttpOnly/i);
+      expect(cookieHeader).toMatch(/Max-Age=2592000/);
+
+      const user = await prisma.user.findUniqueOrThrow({ where: { email } });
+      const devices = await prisma.trustedDevice.findMany({ where: { userId: user.id } });
+      expect(devices).toHaveLength(1);
+      expect(devices[0].tokenHash).toBe(sha256(raw!));
+      expect(devices[0].tokenHash).not.toBe(raw);
+      expect(devices[0].label).toBe("vitest-device/1.0");
+
+      // Trusted device skips the TOTP challenge.
+      const skip = await loginChallenge(ip, email, `trusted_device=${raw}`);
+      expect(skip.body.status).toBe("authenticated");
+      expect(skip.body.accessToken).toBeTruthy();
+
+      const authz = { ...bffHeaders(ip), Authorization: `Bearer ${res.body.accessToken ?? accessToken}` };
+      const status = await request(app).get("/api/v1/auth/2fa/status").set(authz);
+      expect(status.status).toBe(200);
+      expect(status.body.enabled).toBe(true);
+      expect(status.body.trustedDevices).toHaveLength(1);
+      const deviceId = status.body.trustedDevices[0].id as string;
+
+      const unknown = await request(app)
+        .delete("/api/v1/auth/2fa/trusted-devices/does-not-exist")
+        .set(authz);
+      expect(unknown.status).toBe(404);
+
+      const del = await request(app)
+        .delete(`/api/v1/auth/2fa/trusted-devices/${deviceId}`)
+        .set(authz);
+      expect(del.status).toBe(204);
+
+      const after = await loginChallenge(ip, email, `trusted_device=${raw}`);
+      expect(after.body.status).toBe("mfa_required");
+      const again = await request(app)
+        .delete(`/api/v1/auth/2fa/trusted-devices/${deviceId}`)
+        .set(authz);
+      expect(again.status).toBe(404);
+    });
+
+    it("ignores rememberDevice for staff", async () => {
+      const ip = randomIp();
+      const { email, secret } = await registerWithTotp(ip);
+      const user = await prisma.user.findUniqueOrThrow({ where: { email } });
+      await prisma.platformMembership.create({
+        data: { userId: user.id, role: "SUPERADMIN", status: "ACTIVE" },
+      });
+
+      const challenge = await loginChallenge(ip, email);
+      expect(challenge.body.status).toBe("mfa_required");
+      const res = await verifyReq(ip, challenge.body.mfaPendingToken).send({
+        code: authenticator.generate(secret),
+        rememberDevice: true,
+      });
+      expect(res.status).toBe(200);
+      expect(liveCookie(setCookies(res), "trusted_device")).toBeUndefined();
+      expect(await prisma.trustedDevice.count({ where: { userId: user.id } })).toBe(0);
+    });
+
+    it("password reset revokes all trusted devices", async () => {
+      const ip = randomIp();
+      const { email, secret } = await registerWithTotp(ip);
+      const challenge = await loginChallenge(ip, email);
+      const res = await verifyReq(ip, challenge.body.mfaPendingToken).send({
+        code: authenticator.generate(secret),
+        rememberDevice: true,
+      });
+      const raw = liveCookie(setCookies(res), "trusted_device")!;
+      expect(raw).toBeTruthy();
+
+      const user = await prisma.user.findUniqueOrThrow({ where: { email } });
+      const resetRaw = `reset-${Math.random().toString(36).slice(2)}`;
+      await prisma.passwordResetToken.create({
+        data: {
+          userId: user.id,
+          tokenHash: sha256(resetRaw),
+          expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+        },
+      });
+      const reset = await request(app)
+        .post("/api/v1/auth/reset-password")
+        .set(bffHeaders(ip))
+        .send({ token: resetRaw, password: "NewSecret456!" });
+      expect(reset.status).toBe(200);
+
+      const devices = await prisma.trustedDevice.findMany({ where: { userId: user.id } });
+      expect(devices.length).toBeGreaterThan(0);
+      expect(devices.every((d) => d.revokedAt !== null)).toBe(true);
+
+      const relogin = await request(app)
+        .post("/api/v1/auth/login")
+        .set(bffHeaders(ip))
+        .set("Cookie", `trusted_device=${raw}`)
+        .send({ email, password: "NewSecret456!" });
+      expect(relogin.status).toBe(200);
+      expect(relogin.body.status).toBe("mfa_required");
+    });
+
+    it("rate limits verify to 5/min per client", async () => {
+      const ip = randomIp();
+      const statuses: number[] = [];
+      for (let i = 0; i < 6; i++) {
+        const res = await request(app)
+          .post("/api/v1/auth/2fa/verify")
+          .set(bffHeaders(ip))
+          .send({ code: "123456" });
+        statuses.push(res.status);
+      }
+      expect(statuses.slice(0, 5).every((s) => s === 401)).toBe(true);
+      expect(statuses[5]).toBe(429);
+    });
   });
 });
