@@ -64,7 +64,15 @@ discoveryRoutes.get(
   validateQuery(discoverySearchSchema),
   async (req, res, next) => {
     try {
-      res.json(await searchDiscovery(req.query as any));
+      if (!req.auth?.orgId) {
+        throw new AppError("UNAUTHORIZED", "Missing org", 401);
+      }
+      res.json(
+        await searchDiscovery({
+          ...(req.query as any),
+          organizationId: req.auth.orgId,
+        }),
+      );
     } catch (err) {
       next(err);
     }

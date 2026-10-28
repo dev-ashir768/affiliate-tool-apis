@@ -5,6 +5,7 @@ import {
   indexDiscoveryProfile,
   searchDiscoveryInMeili,
 } from "../../lib/meilisearch.js";
+import { formatMarketplaceCategories } from "./marketplace-categories.js";
 
 /** Local shapes so mapping stays valid if the TS server lags behind `prisma generate`. */
 type DiscoveryRow = {
@@ -149,7 +150,7 @@ function toProfile(row: DiscoveryRow) {
     gpmCurrency: row.gpmCurrency ?? null,
     gpmRange: row.gpmRange ?? null,
     contactEmail: row.contactEmail ?? null,
-    categories: row.categories,
+    categories: formatMarketplaceCategories(row.categories ?? []),
     bio: row.bio,
     source: row.source,
     enabled: row.enabled,
@@ -165,6 +166,39 @@ function toProfile(row: DiscoveryRow) {
   };
 }
 
+export function attachSavedToCrm<T extends { handle: string }>(
+  profiles: T[],
+  savedHandles: Set<string>,
+): Array<T & { savedToCrm: boolean }> {
+  return profiles.map((p) => ({
+    ...p,
+    savedToCrm: savedHandles.has(p.handle),
+  }));
+}
+
+async function attachOrganizationSavedState<T extends { handle: string }>(
+  profiles: T[],
+  organizationId?: string,
+): Promise<Array<T & { savedToCrm: boolean }>> {
+  if (!organizationId || profiles.length === 0) {
+    return attachSavedToCrm(profiles, new Set());
+  }
+
+  const handles = [...new Set(profiles.map((p) => p.handle))];
+  const saved = await prisma.creator.findMany({
+    where: {
+      organizationId,
+      platform: "TIKTOK",
+      handle: { in: handles },
+    },
+    select: { handle: true },
+  });
+  return attachSavedToCrm(
+    profiles,
+    new Set(saved.map((creator) => creator.handle)),
+  );
+}
+
 export async function searchDiscovery(params: {
   page: number;
   pageSize: number;
@@ -178,6 +212,7 @@ export async function searchDiscovery(params: {
   hasEmail?: boolean;
   sortBy?: "followers" | "units" | "updated" | "gmv";
   enabledOnly?: boolean;
+  organizationId?: string;
 }) {
   const meili = await searchDiscoveryInMeili(params);
   if (meili) {
@@ -199,8 +234,12 @@ export async function searchDiscovery(params: {
     const ordered = meili.ids
       .map((id) => byId.get(id))
       .filter((r): r is DiscoveryRow => Boolean(r));
+    const data = await attachOrganizationSavedState(
+      ordered.map(toProfile),
+      params.organizationId,
+    );
     return {
-      data: ordered.map(toProfile),
+      data,
       meta: {
         total: meili.total,
         page: params.page,
@@ -265,9 +304,13 @@ export async function searchDiscovery(params: {
     skip: (params.page - 1) * params.pageSize,
     take: params.pageSize,
   })) as DiscoveryRow[];
+  const data = await attachOrganizationSavedState(
+    rows.map(toProfile),
+    params.organizationId,
+  );
 
   return {
-    data: rows.map(toProfile),
+    data,
     meta: {
       total,
       page: params.page,
