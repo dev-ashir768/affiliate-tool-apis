@@ -5,6 +5,15 @@ import {
   indexDiscoveryProfile,
   searchDiscoveryInMeili,
 } from "../../lib/meilisearch.js";
+import {
+  gmvCentsBoundsForRange,
+  gmvRangeTextNeedles,
+  isTikTokGmvRange,
+  isTikTokUnitsSoldRange,
+  unitsSoldBoundsForRange,
+  type TikTokGmvRange,
+  type TikTokUnitsSoldRange,
+} from "../../lib/tiktok-shop/marketplace-filters.js";
 import { formatMarketplaceCategories } from "./marketplace-categories.js";
 
 /** Local shapes so mapping stays valid if the TS server lags behind `prisma generate`. */
@@ -41,21 +50,46 @@ type DiscoveryRow = {
 };
 
 type StringFilter = { contains: string; mode: "insensitive" };
+type IntFilter = { gte?: number; lte?: number };
+type DiscoveryWhereClause = {
+  handle?: StringFilter;
+  displayName?: StringFilter;
+  bio?: StringFilter;
+  gmvRange?: StringFilter;
+  gmvCents?: IntFilter;
+  unitsSold?: IntFilter;
+};
 type DiscoveryWhere = {
   enabled?: boolean;
   region?: "US" | "UK";
-  followerCount?: { gte?: number; lte?: number };
-  unitsSold?: { gte?: number };
-  gmvCents?: { gte?: number };
+  followerCount?: IntFilter;
+  unitsSold?: IntFilter;
+  gmvCents?: IntFilter;
   gmvRange?: StringFilter;
   contactEmail?: { not: null } | null;
-  OR?: Array<{
-    handle?: StringFilter;
-    displayName?: StringFilter;
-    bio?: StringFilter;
-    gmvRange?: StringFilter;
-  }>;
+  OR?: DiscoveryWhereClause[];
+  AND?: Array<{ OR: DiscoveryWhereClause[] } | DiscoveryWhereClause>;
 };
+
+function gmvBandWhere(range: TikTokGmvRange): { OR: DiscoveryWhereClause[] } {
+  const cents = gmvCentsBoundsForRange(range);
+  const needles = gmvRangeTextNeedles(range);
+  return {
+    OR: [
+      { gmvCents: cents },
+      ...needles.map((n) => ({
+        gmvRange: { contains: n, mode: "insensitive" as const },
+      })),
+    ],
+  };
+}
+
+function unitsBandWhere(
+  range: TikTokUnitsSoldRange,
+): DiscoveryWhereClause {
+  // unitsSold is parsed from TikTok units_sold / units_sold_range.minimum_amount.
+  return { unitsSold: unitsSoldBoundsForRange(range) };
+}
 
 type DiscoveryOrderBy =
   | { unitsSold: "desc" }
@@ -208,6 +242,8 @@ export async function searchDiscovery(params: {
   maxFollowers?: number;
   minUnitsSold?: number;
   minGmvCents?: number;
+  gmvRange?: string;
+  unitsSoldRange?: string;
   gmvRangeContains?: string;
   hasEmail?: boolean;
   sortBy?: "followers" | "units" | "updated" | "gmv";
@@ -250,6 +286,7 @@ export async function searchDiscovery(params: {
   }
 
   const where: DiscoveryWhere = {};
+  const andClauses: NonNullable<DiscoveryWhere["AND"]> = [];
   if (params.enabledOnly !== false) where.enabled = true;
   if (params.region) where.region = params.region;
 
@@ -265,11 +302,16 @@ export async function searchDiscovery(params: {
   if (params.minGmvCents != null) {
     where.gmvCents = { gte: params.minGmvCents };
   }
-  if (params.gmvRangeContains?.trim()) {
+  if (params.gmvRange && isTikTokGmvRange(params.gmvRange)) {
+    andClauses.push(gmvBandWhere(params.gmvRange));
+  } else if (params.gmvRangeContains?.trim()) {
     where.gmvRange = {
       contains: params.gmvRangeContains.trim(),
       mode: "insensitive",
     };
+  }
+  if (params.unitsSoldRange && isTikTokUnitsSoldRange(params.unitsSoldRange)) {
+    andClauses.push(unitsBandWhere(params.unitsSoldRange));
   }
   if (params.hasEmail === true) {
     where.contactEmail = { not: null };
@@ -279,13 +321,16 @@ export async function searchDiscovery(params: {
 
   if (params.search?.trim()) {
     const q = params.search.trim();
-    where.OR = [
-      { handle: { contains: q, mode: "insensitive" } },
-      { displayName: { contains: q, mode: "insensitive" } },
-      { bio: { contains: q, mode: "insensitive" } },
-      { gmvRange: { contains: q, mode: "insensitive" } },
-    ];
+    andClauses.push({
+      OR: [
+        { handle: { contains: q, mode: "insensitive" } },
+        { displayName: { contains: q, mode: "insensitive" } },
+        { bio: { contains: q, mode: "insensitive" } },
+        { gmvRange: { contains: q, mode: "insensitive" } },
+      ],
+    });
   }
+  if (andClauses.length) where.AND = andClauses;
 
   const orderBy: DiscoveryOrderBy[] =
     params.sortBy === "units"

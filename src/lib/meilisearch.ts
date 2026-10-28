@@ -2,6 +2,12 @@ import { MeiliSearch, type Index } from "meilisearch";
 import { env } from "../config/env.js";
 import { logger } from "./logger.js";
 import { prisma } from "./prisma.js";
+import {
+  gmvCentsBoundsForRange,
+  isTikTokGmvRange,
+  isTikTokUnitsSoldRange,
+  unitsSoldBoundsForRange,
+} from "./tiktok-shop/marketplace-filters.js";
 
 export type DiscoverySearchDoc = {
   id: string;
@@ -181,6 +187,8 @@ export type MeiliDiscoverySearchParams = {
   maxFollowers?: number;
   minUnitsSold?: number;
   minGmvCents?: number;
+  gmvRange?: string;
+  unitsSoldRange?: string;
   gmvRangeContains?: string;
   hasEmail?: boolean;
   sortBy?: "followers" | "units" | "updated" | "gmv";
@@ -208,8 +216,18 @@ export async function searchDiscoveryInMeili(
   if (params.minUnitsSold != null) {
     filters.push(`unitsSold >= ${params.minUnitsSold}`);
   }
+  if (params.unitsSoldRange && isTikTokUnitsSoldRange(params.unitsSoldRange)) {
+    const bounds = unitsSoldBoundsForRange(params.unitsSoldRange);
+    if (bounds.gte != null) filters.push(`unitsSold >= ${bounds.gte}`);
+    if (bounds.lte != null) filters.push(`unitsSold <= ${bounds.lte}`);
+  }
   if (params.minGmvCents != null) {
     filters.push(`gmvCents >= ${params.minGmvCents}`);
+  }
+  if (params.gmvRange && isTikTokGmvRange(params.gmvRange)) {
+    const bounds = gmvCentsBoundsForRange(params.gmvRange);
+    if (bounds.gte != null) filters.push(`gmvCents >= ${bounds.gte}`);
+    if (bounds.lte != null) filters.push(`gmvCents <= ${bounds.lte}`);
   }
   if (params.hasEmail === true) {
     filters.push("contactEmail IS NOT EMPTY");

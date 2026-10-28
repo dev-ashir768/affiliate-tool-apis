@@ -1,4 +1,11 @@
 import { z } from "zod";
+import {
+  TIKTOK_GMV_RANGES,
+  TIKTOK_UNITS_SOLD_RANGES,
+} from "../../lib/tiktok-shop/marketplace-filters.js";
+
+const tikTokGmvRangeSchema = z.enum(TIKTOK_GMV_RANGES);
+const tikTokUnitsSoldRangeSchema = z.enum(TIKTOK_UNITS_SOLD_RANGES);
 
 export const discoverySearchSchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
@@ -10,7 +17,11 @@ export const discoverySearchSchema = z.object({
   minUnitsSold: z.coerce.number().int().nonnegative().optional(),
   /** Exact GMV floor in cents (from parsed gmvAmount). */
   minGmvCents: z.coerce.number().int().nonnegative().optional(),
-  /** Match Partner-style GMV band labels stored in gmvRange (e.g. "150K", "$1K"). */
+  /** Official TikTok Marketplace GMV band enum. */
+  gmvRange: tikTokGmvRangeSchema.optional(),
+  /** Official TikTok Marketplace units-sold band enum. */
+  unitsSoldRange: tikTokUnitsSoldRangeSchema.optional(),
+  /** Legacy substring match on stored gmvRange labels. */
   gmvRangeContains: z.string().trim().max(40).optional(),
   hasEmail: z
     .union([z.literal("true"), z.literal("false"), z.boolean()])
@@ -45,6 +56,12 @@ export const tiktokDiscoverySyncSchema = z.object({
   maxPages: z.coerce.number().int().min(1).max(20).optional(),
   keyword: z.string().trim().max(100).optional().nullable(),
   minFollowers: z.coerce.number().int().nonnegative().optional().nullable(),
+  gmvRanges: z.array(tikTokGmvRangeSchema).max(4).optional().nullable(),
+  unitsSoldRanges: z
+    .array(tikTokUnitsSoldRangeSchema)
+    .max(4)
+    .optional()
+    .nullable(),
   pageSize: z.union([z.literal(12), z.literal(20)]).optional(),
   /** Niche category ids from TikTok (optional). */
   categoryIds: z

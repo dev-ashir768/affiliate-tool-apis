@@ -31,6 +31,8 @@ export type DiscoveryTikTokSyncOptions = {
   maxPages?: number;
   keyword?: string | null;
   minFollowers?: number | null;
+  gmvRanges?: string[] | null;
+  unitsSoldRanges?: string[] | null;
   pageSize?: 12 | 20;
   categoryIds?: string[] | null;
   shopId?: string | null;
@@ -223,6 +225,8 @@ export async function syncDiscoveryFromTikTok(
       keyword: options.keyword,
       searchKey,
       minFollowers: options.minFollowers,
+      gmvRanges: options.gmvRanges,
+      unitsSoldRanges: options.unitsSoldRanges,
       categoryIds: options.categoryIds,
     });
     pages += 1;
@@ -272,6 +276,8 @@ export async function syncDiscoveryFromTikTok(
         shopId: resolved.shopId,
         credentialSource: resolved.credentialSource,
         minFollowers: options.minFollowers ?? null,
+        gmvRanges: options.gmvRanges ?? null,
+        unitsSoldRanges: options.unitsSoldRanges ?? null,
         categoryIds: options.categoryIds ?? null,
       },
     });

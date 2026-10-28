@@ -394,6 +394,10 @@ export async function searchMarketplaceCreators(input: {
   keyword?: string | null;
   searchKey?: string | null;
   minFollowers?: number | null;
+  /** Official Marketplace gmv_ranges enums. */
+  gmvRanges?: string[] | null;
+  /** Official Marketplace units_sold_ranges enums. */
+  unitsSoldRanges?: string[] | null;
   /** TikTok category ids when known (niche filter). */
   categoryIds?: string[] | null;
 }): Promise<CreatorSearchResult> {
@@ -410,6 +414,12 @@ export async function searchMarketplaceCreators(input: {
     body.follower_demographics = {
       count_range: { count_ge: input.minFollowers },
     };
+  }
+  if (input.gmvRanges?.length) {
+    body.gmv_ranges = input.gmvRanges;
+  }
+  if (input.unitsSoldRanges?.length) {
+    body.units_sold_ranges = input.unitsSoldRanges;
   }
   if (input.categoryIds?.length) {
     body.category = input.categoryIds.map((id) => ({ id: String(id) }));
