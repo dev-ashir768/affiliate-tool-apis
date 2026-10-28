@@ -6,7 +6,7 @@
  * Extra unknown keys are preserved in metricsRaw for forward compatibility.
  */
 
-import type { Prisma } from "@prisma/client";
+import type { InputJsonValue } from "@prisma/client/runtime/library";
 
 export type MarketplaceMetrics = {
   handle: string;
@@ -31,7 +31,7 @@ export type MarketplaceMetrics = {
   contactEmail: string | null;
   categories: string[];
   bio: string | null;
-  metricsRaw: Prisma.InputJsonValue | null;
+  metricsRaw: InputJsonValue | null;
   metricsSyncedAt: Date;
 };
 
@@ -283,16 +283,17 @@ export function normalizeMarketplaceCreator(
     liveGmvAmount: channels.live,
     productCardGmvAmount: channels.productCard,
     avgCommissionRange: extractCommissionRange(raw),
-    unitsSold: asInt(
-      raw.units_sold ?? raw.items_sold ?? raw.sold_count ?? raw.sales_volume,
-    ),
+    unitsSold:
+      asInt(
+        raw.units_sold ?? raw.items_sold ?? raw.sold_count ?? raw.sales_volume,
+      ) ?? asInt(asRecord(raw.units_sold_range)?.minimum_amount),
     gpmAmount: gpmMoney.amount,
     gpmCurrency: gpmMoney.currency ?? gpmRangeInfo.currency,
     gpmRange: gpmRangeInfo.range,
     contactEmail: extractContactEmail(raw),
     categories,
     bio: bioText ?? gmvSummary,
-    metricsRaw: raw as Prisma.InputJsonValue,
+    metricsRaw: raw as InputJsonValue,
     metricsSyncedAt: opts.metricsSyncedAt ?? new Date(),
   };
 }

@@ -1,8 +1,3 @@
-import type {
-  CreatorDiscoveryProfile,
-  Prisma,
-  ShopRegion,
-} from "@prisma/client";
 import { prisma } from "../../lib/prisma.js";
 import { AppError } from "../../lib/errors.js";
 import { writeAuditLog } from "../../lib/audit.js";
@@ -11,14 +6,14 @@ import {
   searchDiscoveryInMeili,
 } from "../../lib/meilisearch.js";
 
-/** Metrics fields are optional so mapping stays valid if the TS server lags behind `prisma generate`. */
+/** Local shapes so mapping stays valid if the TS server lags behind `prisma generate`. */
 type DiscoveryRow = {
   id: string;
   platform: string;
   handle: string;
   displayName: string | null;
   creatorOpenId: string | null;
-  region: ShopRegion | null;
+  region: "US" | "UK" | null;
   followerCount: number | null;
   categories: string[];
   bio: string | null;
@@ -40,11 +35,95 @@ type DiscoveryRow = {
   gpmCurrency?: string | null;
   gpmRange?: string | null;
   contactEmail?: string | null;
-  metricsRaw?: Prisma.JsonValue | null;
+  metricsRaw?: unknown;
   metricsSyncedAt?: Date | null;
 };
 
+type StringFilter = { contains: string; mode: "insensitive" };
+type DiscoveryWhere = {
+  enabled?: boolean;
+  region?: "US" | "UK";
+  followerCount?: { gte?: number; lte?: number };
+  unitsSold?: { gte?: number };
+  gmvCents?: { gte?: number };
+  gmvRange?: StringFilter;
+  contactEmail?: { not: null } | null;
+  OR?: Array<{
+    handle?: StringFilter;
+    displayName?: StringFilter;
+    bio?: StringFilter;
+    gmvRange?: StringFilter;
+  }>;
+};
+
+type DiscoveryOrderBy =
+  | { unitsSold: "desc" }
+  | { updatedAt: "desc" }
+  | { gmvCents: "desc" }
+  | { followerCount: "desc" };
+
+function asMetricsRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
+function moneyAmountFromRaw(value: unknown): string | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const amount = (value as { amount?: unknown }).amount;
+  if (amount == null) return null;
+  const s = String(amount).trim();
+  return s.length ? s : null;
+}
+
+function extrasFromMetricsRaw(raw: Record<string, unknown> | null) {
+  if (!raw) {
+    return {
+      unitsSoldRange: null as string | null,
+      creatorLevel: null as number | null,
+      avgEcVideoViewCount: null as number | null,
+      avgEcLiveUv: null as number | null,
+      majorGender: null as string | null,
+      majorGenderPct: null as number | null,
+      ageRanges: [] as string[],
+    };
+  }
+  const unitsRange = asMetricsRecord(raw.units_sold_range);
+  const demos = asMetricsRecord(raw.top_follower_demographics);
+  const major = asMetricsRecord(demos?.major_gender);
+  const ages = Array.isArray(demos?.age_ranges)
+    ? demos.age_ranges.map((a) => String(a)).filter(Boolean)
+    : [];
+  const level = raw.creator_level;
+  const videoViews = raw.avg_ec_video_view_count;
+  const liveUv = raw.avg_ec_live_uv;
+  return {
+    unitsSoldRange:
+      (typeof unitsRange?.formatted_range === "string"
+        ? unitsRange.formatted_range
+        : null) ?? null,
+    creatorLevel:
+      typeof level === "number" && Number.isFinite(level) ? level : null,
+    avgEcVideoViewCount:
+      typeof videoViews === "number" && Number.isFinite(videoViews)
+        ? Math.round(videoViews)
+        : null,
+    avgEcLiveUv:
+      typeof liveUv === "number" && Number.isFinite(liveUv)
+        ? Math.round(liveUv)
+        : null,
+    majorGender:
+      typeof major?.gender === "string" ? String(major.gender) : null,
+    majorGenderPct:
+      typeof major?.percentage === "number" && Number.isFinite(major.percentage)
+        ? major.percentage
+        : null,
+    ageRanges: ages,
+  };
+}
+
 function toProfile(row: DiscoveryRow) {
+  const raw = asMetricsRecord(row.metricsRaw ?? null);
+  const extras = extrasFromMetricsRaw(raw);
   return {
     id: row.id,
     platform: row.platform,
@@ -58,11 +137,14 @@ function toProfile(row: DiscoveryRow) {
     gmvCurrency: row.gmvCurrency ?? null,
     gmvRange: row.gmvRange ?? null,
     gmvCents: row.gmvCents ?? null,
-    videoGmvAmount: row.videoGmvAmount ?? null,
-    liveGmvAmount: row.liveGmvAmount ?? null,
+    videoGmvAmount:
+      row.videoGmvAmount ?? moneyAmountFromRaw(raw?.video_gmv) ?? null,
+    liveGmvAmount:
+      row.liveGmvAmount ?? moneyAmountFromRaw(raw?.live_gmv) ?? null,
     productCardGmvAmount: row.productCardGmvAmount ?? null,
     avgCommissionRange: row.avgCommissionRange ?? null,
     unitsSold: row.unitsSold ?? null,
+    unitsSoldRange: extras.unitsSoldRange,
     gpmAmount: row.gpmAmount ?? null,
     gpmCurrency: row.gpmCurrency ?? null,
     gpmRange: row.gpmRange ?? null,
@@ -71,6 +153,12 @@ function toProfile(row: DiscoveryRow) {
     bio: row.bio,
     source: row.source,
     enabled: row.enabled,
+    creatorLevel: extras.creatorLevel,
+    avgEcVideoViewCount: extras.avgEcVideoViewCount,
+    avgEcLiveUv: extras.avgEcLiveUv,
+    majorGender: extras.majorGender,
+    majorGenderPct: extras.majorGenderPct,
+    ageRanges: extras.ageRanges,
     metricsSyncedAt: row.metricsSyncedAt?.toISOString() ?? null,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
@@ -106,11 +194,11 @@ export async function searchDiscovery(params: {
     }
     const rows = (await prisma.creatorDiscoveryProfile.findMany({
       where: { id: { in: meili.ids } },
-    })) as CreatorDiscoveryProfile[];
+    })) as DiscoveryRow[];
     const byId = new Map(rows.map((r) => [r.id, r]));
     const ordered = meili.ids
       .map((id) => byId.get(id))
-      .filter((r): r is CreatorDiscoveryProfile => Boolean(r));
+      .filter((r): r is DiscoveryRow => Boolean(r));
     return {
       data: ordered.map(toProfile),
       meta: {
@@ -122,7 +210,7 @@ export async function searchDiscovery(params: {
     };
   }
 
-  const where: Prisma.CreatorDiscoveryProfileWhereInput = {};
+  const where: DiscoveryWhere = {};
   if (params.enabledOnly !== false) where.enabled = true;
   if (params.region) where.region = params.region;
 
@@ -156,13 +244,11 @@ export async function searchDiscovery(params: {
       { handle: { contains: q, mode: "insensitive" } },
       { displayName: { contains: q, mode: "insensitive" } },
       { bio: { contains: q, mode: "insensitive" } },
-      {
-        gmvRange: { contains: q, mode: "insensitive" },
-      } as Prisma.CreatorDiscoveryProfileWhereInput,
+      { gmvRange: { contains: q, mode: "insensitive" } },
     ];
   }
 
-  const orderBy: Prisma.CreatorDiscoveryProfileOrderByWithRelationInput[] =
+  const orderBy: DiscoveryOrderBy[] =
     params.sortBy === "units"
       ? [{ unitsSold: "desc" }, { updatedAt: "desc" }]
       : params.sortBy === "updated"
@@ -178,7 +264,7 @@ export async function searchDiscovery(params: {
     orderBy,
     skip: (params.page - 1) * params.pageSize,
     take: params.pageSize,
-  })) as CreatorDiscoveryProfile[];
+  })) as DiscoveryRow[];
 
   return {
     data: rows.map(toProfile),
@@ -324,7 +410,7 @@ function crmSnapshotFromProfile(profile: DiscoveryRow) {
     metricsRaw:
       profile.metricsRaw == null
         ? undefined
-        : (profile.metricsRaw as Prisma.InputJsonValue),
+        : (profile.metricsRaw as object),
     metricsSyncedAt: profile.metricsSyncedAt ?? new Date(),
     notes: profile.bio,
   };
@@ -336,7 +422,7 @@ export async function saveDiscoveryToCrm(
 ) {
   const profile = (await prisma.creatorDiscoveryProfile.findUnique({
     where: { id: profileId },
-  })) as CreatorDiscoveryProfile | null;
+  })) as DiscoveryRow | null;
   if (!profile || !profile.enabled) {
     throw new AppError("NOT_FOUND", "Discovery profile not found", 404);
   }

@@ -11,18 +11,23 @@ import {
 } from "./errors.js";
 
 /**
- * Seller Affiliate — Search Creator on Marketplace (202508).
+ * Seller Affiliate — Search Creator on Marketplace.
  * @see https://partner.tiktokshop.com/docv2/page/seller-search-creator-on-marketplace-202508
  * Scope: seller.creator_marketplace.read
  */
 export const CREATOR_SEARCH_PATH =
   "/affiliate_seller/202508/marketplace_creators/search";
 
+/**
+ * Get Marketplace Creator Performance.
+ * @see https://partner.tiktokshop.com/docv2/page/get-marketplace-creator-performance-202508
+ * Scope: seller.creator_marketplace.read
+ */
 export const CREATOR_PERFORMANCE_PATH = (creatorOpenId: string) =>
   `/affiliate_seller/202508/marketplace_creators/${encodeURIComponent(creatorOpenId)}`;
 
 /**
- * Seller Affiliate — Create Target Collaboration (invite creators).
+ * Seller Affiliate — Target Collaboration (invite creators).
  * @see https://partner.tiktokshop.com/docv2/page/create-target-collaboration-202508
  */
 export const TARGET_COLLAB_CREATE_PATH =
@@ -34,11 +39,36 @@ export const TARGET_COLLAB_SEARCH_PATH =
 export const TARGET_COLLAB_DETAIL_PATH = (id: string) =>
   `/affiliate_seller/202508/target_collaborations/${encodeURIComponent(id)}`;
 
-/** Product catalog search (for invite product picker). */
+/**
+ * Product catalog search (invite product picker).
+ * @see https://partner.tiktokshop.com/docv2/page/search-products-202502
+ * Scope: seller.product.basic
+ */
 export const PRODUCT_SEARCH_PATH = "/product/202502/products/search";
 
-/** Affiliate seller IM (creator DMs). */
-export const CONVERSATIONS_LIST_PATH = "/affiliate_seller/202505/conversations";
+/**
+ * Affiliate seller IM (creator DMs).
+ * Scope: seller.affiliate_messages.write
+ *
+ * Paths/versions are per-endpoint (not interchangeable):
+ * - List GET — try 202412 (docs), then newer inbox-family versions
+ * - Create POST 202508 — get-or-create-creator-conversation-202508
+ * - Messages GET 202412 — get-creator-conversation-messages-202412
+ *   (note singular `conversation` in path)
+ * - Send POST 202412 — send-im-message-202412
+ * - Mark read POST 202412 — official path typo: `conversatons`
+ * - Newest unread GET 202412 — get-latest-unread-messages-202412
+ * - Inbox counts GET 202608 — get-inbox-category-counts-202608
+ *
+ * Sandbox/test sellers cannot open or send IM (TikTok 16030009).
+ */
+/** Documented Get Conversation List version, plus fallbacks if gateway rejects it. */
+export const CONVERSATIONS_LIST_VERSIONS = [
+  "202412",
+  "202608",
+  "202508",
+] as const;
+export const CONVERSATIONS_LIST_PATH = `/affiliate_seller/${CONVERSATIONS_LIST_VERSIONS[0]}/conversations`;
 export const CONVERSATION_CREATE_PATH =
   "/affiliate_seller/202508/conversations";
 export const CONVERSATION_MESSAGES_PATH = (conversationId: string) =>
@@ -53,15 +83,24 @@ export const CONVERSATION_UNREAD_NEWEST_PATH =
 
 /**
  * Seller affiliate-attributed orders (creator GMV attribution).
- * @see https://partner.tiktokshop.com/docv2 (affiliate_seller orders search)
+ * @see https://partner.tiktokshop.com/docv2/page/search-seller-affiliate-orders-202410
+ * Scope: seller.affiliate_collaboration.read
  */
 export const AFFILIATE_ORDERS_SEARCH_PATH =
-  "/affiliate_seller/202412/orders/search";
+  "/affiliate_seller/202410/orders/search";
 
-/** Shop order list (fulfillment / all shop orders). */
+/**
+ * Shop order list (fulfillment / all shop orders).
+ * @see https://partner.tiktokshop.com/docv2/page/get-order-list-202309
+ */
 export const SHOP_ORDERS_SEARCH_PATH = "/order/202309/orders/search";
 
-/** Free sample applications (approve / reject / fulfill). */
+/**
+ * Free sample applications (search / review / fulfillments).
+ * @see search-sample-applications-202508
+ * @see seller-review-sample-applications-202507
+ * @see search-sample-application-fulfillments-202409
+ */
 export const SAMPLE_APPLICATIONS_SEARCH_PATH =
   "/affiliate_seller/202508/sample_applications/search";
 export const SAMPLE_APPLICATION_REVIEW_PATH = (applicationId: string) =>
@@ -688,6 +727,17 @@ export type TikTokConversationSummary = {
   unreadCount: number;
 };
 
+function isInvalidTikTokApiVersionError(err: unknown): boolean {
+  if (!(err instanceof AppError)) return false;
+  const details = err.details as
+    | { messageKeyword?: string | null; tiktokCode?: number | null; upstreamMessage?: string | null }
+    | undefined;
+  if (details?.messageKeyword === "Invalid API version") return true;
+  if (details?.tiktokCode === 36009014) return true;
+  const upstream = details?.upstreamMessage ?? err.message;
+  return /invalid api version/i.test(upstream);
+}
+
 export async function listTikTokConversations(input: {
   credentials: TikTokShopCredentials;
   pageSize?: number;
@@ -697,6 +747,7 @@ export async function listTikTokConversations(input: {
   conversations: TikTokConversationSummary[];
   nextPageToken: string | null;
   hasMore: boolean;
+  apiVersion: string;
 }> {
   const pageSize = Math.min(Math.max(input.pageSize ?? 20, 1), 50);
   const query: Record<string, string> = {
@@ -705,35 +756,51 @@ export async function listTikTokConversations(input: {
   };
   if (input.pageToken) query.page_token = input.pageToken;
 
-  const data = await tikTokFetch<{
-    conversations?: Array<{
-      id?: string;
-      creator_im_id?: string;
-      username?: string;
-      avatar?: string;
-      unread_count?: number;
-    }>;
-    next_page_token?: string;
-    has_more?: boolean;
-  }>(CONVERSATIONS_LIST_PATH, {
-    method: "GET",
-    query,
-    credentials: input.credentials,
-  });
+  let lastError: unknown;
+  for (const version of CONVERSATIONS_LIST_VERSIONS) {
+    const path = `/affiliate_seller/${version}/conversations`;
+    try {
+      const data = await tikTokFetch<{
+        conversations?: Array<{
+          id?: string;
+          creator_im_id?: string;
+          username?: string;
+          avatar?: string;
+          unread_count?: number;
+        }>;
+        next_page_token?: string;
+        has_more?: boolean;
+      }>(path, {
+        method: "GET",
+        query,
+        credentials: input.credentials,
+      });
 
-  return {
-    conversations: (data?.conversations ?? [])
-      .filter((c) => c.id)
-      .map((c) => ({
-        id: String(c.id),
-        creatorImId: c.creator_im_id ?? null,
-        username: c.username ?? null,
-        avatarUrl: c.avatar ?? null,
-        unreadCount: typeof c.unread_count === "number" ? c.unread_count : 0,
-      })),
-    nextPageToken: data?.next_page_token || null,
-    hasMore: Boolean(data?.has_more),
-  };
+      return {
+        conversations: (data?.conversations ?? [])
+          .filter((c) => c.id)
+          .map((c) => ({
+            id: String(c.id),
+            creatorImId: c.creator_im_id ?? null,
+            username: c.username ?? null,
+            avatarUrl: c.avatar ?? null,
+            unreadCount: typeof c.unread_count === "number" ? c.unread_count : 0,
+          })),
+        nextPageToken: data?.next_page_token || null,
+        hasMore: Boolean(data?.has_more),
+        apiVersion: version,
+      };
+    } catch (err) {
+      lastError = err;
+      if (!isInvalidTikTokApiVersionError(err)) throw err;
+      logger.warn("tiktok conversations list version rejected; trying next", {
+        version,
+        remaining: CONVERSATIONS_LIST_VERSIONS.filter((v) => v !== version),
+      });
+    }
+  }
+
+  throw lastError;
 }
 
 export async function createTikTokConversation(input: {
@@ -826,7 +893,8 @@ export async function listTikTokConversationMessages(input: {
   nextPageToken: string | null;
   hasMore: boolean;
 }> {
-  const pageSize = Math.min(Math.max(input.pageSize ?? 20, 1), 50);
+  // Partner docs: page_size must be 1–20 for Get Creator Conversation Messages.
+  const pageSize = Math.min(Math.max(input.pageSize ?? 20, 1), 20);
   const query: Record<string, string> = {
     page_size: String(pageSize),
   };

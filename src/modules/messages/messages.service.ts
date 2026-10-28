@@ -133,54 +133,78 @@ export async function syncAndListConversations(
     sync?: boolean;
   },
 ) {
-  const { credentials } = await assertOAuthShop(organizationId, input.shopId);
+  const { credentials, shop } = await assertOAuthShop(
+    organizationId,
+    input.shopId,
+  );
   const shouldSync = input.sync !== false;
 
   let nextPageToken: string | null = null;
   let hasMore = false;
+  let synced = false;
+  let syncWarning: string | null = null;
 
   if (shouldSync) {
-    const remote = await listTikTokConversations({
-      credentials,
-      pageSize: input.pageSize,
-      pageToken: input.pageToken,
-      onlyNeedConversationId: false,
-    });
-    nextPageToken = remote.nextPageToken;
-    hasMore = remote.hasMore;
+    try {
+      const remote = await listTikTokConversations({
+        credentials,
+        pageSize: input.pageSize,
+        pageToken: input.pageToken,
+        onlyNeedConversationId: false,
+      });
+      nextPageToken = remote.nextPageToken;
+      hasMore = remote.hasMore;
+      synced = true;
 
-    for (const c of remote.conversations) {
-      const creatorId = await linkCreatorByUsername(
-        organizationId,
-        c.username,
-        c.creatorImId,
-      );
-      await prisma.creatorConversation.upsert({
-        where: {
-          shopId_externalConversationId: {
-            shopId: input.shopId,
-            externalConversationId: c.id,
-          },
-        },
-        create: {
+      for (const c of remote.conversations) {
+        const creatorId = await linkCreatorByUsername(
           organizationId,
-          shopId: input.shopId,
-          creatorId,
-          externalConversationId: c.id,
-          creatorImId: c.creatorImId,
-          creatorUsername: c.username,
-          avatarUrl: c.avatarUrl,
-          unreadCount: c.unreadCount,
-          lastSyncedAt: new Date(),
-        },
-        update: {
-          creatorId: creatorId ?? undefined,
-          creatorImId: c.creatorImId ?? undefined,
-          creatorUsername: c.username ?? undefined,
-          avatarUrl: c.avatarUrl ?? undefined,
-          unreadCount: c.unreadCount,
-          lastSyncedAt: new Date(),
-        },
+          c.username,
+          c.creatorImId,
+        );
+        await prisma.creatorConversation.upsert({
+          where: {
+            shopId_externalConversationId: {
+              shopId: input.shopId,
+              externalConversationId: c.id,
+            },
+          },
+          create: {
+            organizationId,
+            shopId: input.shopId,
+            creatorId,
+            externalConversationId: c.id,
+            creatorImId: c.creatorImId,
+            creatorUsername: c.username,
+            avatarUrl: c.avatarUrl,
+            unreadCount: c.unreadCount,
+            lastSyncedAt: new Date(),
+          },
+          update: {
+            creatorId: creatorId ?? undefined,
+            creatorImId: c.creatorImId ?? undefined,
+            creatorUsername: c.username ?? undefined,
+            avatarUrl: c.avatarUrl ?? undefined,
+            unreadCount: c.unreadCount,
+            lastSyncedAt: new Date(),
+          },
+        });
+      }
+    } catch (err) {
+      // Keep local inbox usable when TikTok rejects list (sandbox / version / scopes).
+      const message =
+        err instanceof AppError
+          ? err.message
+          : "TikTok conversation sync failed";
+      const isSandbox = /sandbox/i.test(shop.displayName ?? "");
+      syncWarning = isSandbox
+        ? `${message} Sandbox/test sellers cannot use affiliate IM — connect a live shop.`
+        : message;
+      logger.warn("messages.conversations.sync_failed", {
+        shopId: input.shopId,
+        organizationId,
+        message,
+        isSandbox,
       });
     }
   }
@@ -199,7 +223,8 @@ export async function syncAndListConversations(
     conversations: rows.map(toConversation),
     nextPageToken,
     hasMore,
-    synced: shouldSync,
+    synced,
+    syncWarning,
   };
 }
 

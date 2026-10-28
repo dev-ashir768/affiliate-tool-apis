@@ -191,7 +191,7 @@ function map36009004(rawMessage: string): TikTokMappedError {
       message: "TikTok API version is invalid or unsupported.",
       category: "parameter",
       remediation:
-        "Use the version in the endpoint path (e.g. 202508) per API versioning docs.",
+        "Confirm the endpoint is enabled in Partner Center → Manage API for this app, use the path version from that endpoint's reference (e.g. get-conversation-list-202412), and note sandbox/test sellers cannot use affiliate IM.",
       messageKeyword: "Invalid API version",
     };
   }
@@ -376,6 +376,22 @@ export function mapTikTokOpenApiError(input: {
         category: "auth",
         remediation: "Restart seller OAuth and exchange a fresh auth_code once.",
         messageKeyword: null,
+      };
+    // Affiliate IM — sandbox / test sellers cannot open or send messages.
+    case 16030009:
+      return {
+        appCode: "FAILED_PRECONDITION",
+        status: 403,
+        message:
+          rawMessage ||
+          "TikTok test/sandbox sellers cannot use affiliate IM. Connect a live (non-test) shop.",
+        category: "authorization",
+        remediation:
+          "OAuth a real seller shop (not SANDBOX_*) with seller.affiliate_messages.write, then retry Open chat.",
+        messageKeyword: includesAny(rawMessage, [
+          "Test accounts cannot send",
+          "non-test account",
+        ]),
       };
     // Seller Search Creator on Marketplace (202508) — endpoint Errorcode section
     case 45101004:

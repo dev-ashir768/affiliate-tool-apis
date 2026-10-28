@@ -113,6 +113,20 @@ describe("mapTikTokOpenApiError", () => {
     expect(isRetryableTikTokError(m, 36009003)).toBe(true);
   });
 
+  it("maps IM sandbox block 16030009 as failed precondition", () => {
+    const m = mapTikTokOpenApiError({
+      httpStatus: 200,
+      body: {
+        code: 16030009,
+        message:
+          "Operation Not Allowed. Cannot perform this operation: Test accounts cannot send messages. Please use a non-test account before retrying.",
+      },
+    });
+    expect(m.appCode).toBe("FAILED_PRECONDITION");
+    expect(m.status).toBe(403);
+    expect(m.remediation).toMatch(/live|non-test|SANDBOX/i);
+  });
+
   it("throwMappedTikTokError attaches request_id + docs in details", () => {
     try {
       throwMappedTikTokError({
