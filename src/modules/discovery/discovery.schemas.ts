@@ -31,6 +31,15 @@ export const discoverySearchSchema = z.object({
       if (typeof v === "boolean") return v;
       return v === "true";
     }),
+  /** Filter by whether the handle exists in the org CRM. */
+  savedToCrm: z
+    .union([z.literal("true"), z.literal("false"), z.boolean()])
+    .optional()
+    .transform((v) => {
+      if (v === undefined) return undefined;
+      if (typeof v === "boolean") return v;
+      return v === "true";
+    }),
   sortBy: z
     .enum(["followers", "units", "updated", "gmv"])
     .optional()

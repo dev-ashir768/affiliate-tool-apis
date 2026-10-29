@@ -63,6 +63,7 @@ type DiscoveryWhereClause = {
 type DiscoveryWhere = {
   enabled?: boolean;
   region?: "US" | "UK";
+  handle?: { in: string[] } | { notIn: string[] };
   followerCount?: IntFilter;
   unitsSold?: IntFilter;
   gmvCents?: IntFilter;
@@ -253,11 +254,17 @@ export async function searchDiscovery(params: {
   unitsSoldRange?: string;
   gmvRangeContains?: string;
   hasEmail?: boolean;
+  /** true = only CRM-saved handles; false = not yet saved for this org. */
+  savedToCrm?: boolean;
   sortBy?: "followers" | "units" | "updated" | "gmv";
   enabledOnly?: boolean;
   organizationId?: string;
 }) {
-  const meili = await searchDiscoveryInMeili(params);
+  // CRM save state is org-scoped — Meili can't filter it; use Postgres.
+  const meili =
+    params.savedToCrm == null
+      ? await searchDiscoveryInMeili(params)
+      : null;
   if (meili) {
     if (meili.ids.length === 0) {
       return {
@@ -324,6 +331,47 @@ export async function searchDiscovery(params: {
     where.contactEmail = { not: null };
   } else if (params.hasEmail === false) {
     where.contactEmail = null;
+  }
+
+  if (params.savedToCrm != null) {
+    if (!params.organizationId) {
+      if (params.savedToCrm === true) {
+        return {
+          data: [],
+          meta: {
+            total: 0,
+            page: params.page,
+            pageSize: params.pageSize,
+            engine: "postgres" as const,
+          },
+        };
+      }
+    } else {
+      const saved = await prisma.creator.findMany({
+        where: {
+          organizationId: params.organizationId,
+          platform: "TIKTOK",
+        },
+        select: { handle: true },
+      });
+      const handles = saved.map((c) => c.handle);
+      if (params.savedToCrm === true) {
+        if (handles.length === 0) {
+          return {
+            data: [],
+            meta: {
+              total: 0,
+              page: params.page,
+              pageSize: params.pageSize,
+              engine: "postgres" as const,
+            },
+          };
+        }
+        where.handle = { in: handles };
+      } else if (handles.length > 0) {
+        where.handle = { notIn: handles };
+      }
+    }
   }
 
   if (params.search?.trim()) {
