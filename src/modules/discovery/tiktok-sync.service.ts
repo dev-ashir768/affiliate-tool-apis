@@ -205,7 +205,7 @@ export async function syncDiscoveryFromTikTok(
   }
 
   const resolved = await resolveSyncCredentials(options);
-  const maxPages = Math.min(Math.max(options.maxPages ?? 3, 1), 20);
+  const maxPages = Math.min(Math.max(options.maxPages ?? 3, 1), 50);
   const pageSize = options.pageSize === 12 ? 12 : 20;
   const propagateCrm = options.propagateCrm !== false;
 

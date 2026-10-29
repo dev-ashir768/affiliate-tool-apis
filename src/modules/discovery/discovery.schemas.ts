@@ -62,7 +62,7 @@ export const importDiscoverySchema = z.object({
 });
 
 export const tiktokDiscoverySyncSchema = z.object({
-  maxPages: z.coerce.number().int().min(1).max(20).optional(),
+  maxPages: z.coerce.number().int().min(1).max(50).optional(),
   keyword: z.string().trim().max(100).optional().nullable(),
   minFollowers: z.coerce.number().int().nonnegative().optional().nullable(),
   gmvRanges: z.array(tikTokGmvRangeSchema).max(4).optional().nullable(),
