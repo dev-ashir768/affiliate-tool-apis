@@ -213,6 +213,35 @@ export function parseMarketplaceAmountToCents(
 }
 
 /**
+ * Pull marketplace niche category ids from a TikTok creator payload.
+ * Accepts string/number ids or objects with `id` / `category_id` / `parent_category_id`.
+ */
+export function extractMarketplaceCategoryIds(
+  raw: Record<string, unknown>,
+): string[] {
+  const categoriesRaw = raw.category_ids ?? raw.categories ?? raw.category;
+  if (!Array.isArray(categoriesRaw)) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const item of categoriesRaw) {
+    let id: string | null = null;
+    if (typeof item === "string" || typeof item === "number") {
+      id = String(item).trim();
+    } else {
+      const rec = asRecord(item);
+      id =
+        asString(rec?.id) ??
+        asString(rec?.category_id) ??
+        asString(rec?.parent_category_id);
+    }
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
+}
+
+/**
  * Normalize a TikTok marketplace creator object (search or performance).
  * Defensive: missing fields stay null; never invent Seller-Center-only metrics.
  */
@@ -251,10 +280,7 @@ export function normalizeMarketplaceCreator(
   }
 
   const avatar = asRecord(raw.avatar);
-  const categoriesRaw = raw.category_ids ?? raw.categories;
-  const categories = Array.isArray(categoriesRaw)
-    ? categoriesRaw.map((c) => String(c)).filter(Boolean)
-    : [];
+  const categories = extractMarketplaceCategoryIds(raw);
 
   const bioText = extractBio(raw);
   const gmvSummary = formatGmvBio({

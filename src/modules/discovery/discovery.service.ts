@@ -14,6 +14,7 @@ import {
   type TikTokGmvRange,
   type TikTokUnitsSoldRange,
 } from "../../lib/tiktok-shop/marketplace-filters.js";
+import { extractMarketplaceCategoryIds } from "./creator-metrics.js";
 import { formatMarketplaceCategories } from "./marketplace-categories.js";
 
 /** Local shapes so mapping stays valid if the TS server lags behind `prisma generate`. */
@@ -184,7 +185,13 @@ function toProfile(row: DiscoveryRow) {
     gpmCurrency: row.gpmCurrency ?? null,
     gpmRange: row.gpmRange ?? null,
     contactEmail: row.contactEmail ?? null,
-    categories: formatMarketplaceCategories(row.categories ?? []),
+    categories: formatMarketplaceCategories(
+      (row.categories?.length
+        ? row.categories
+        : extractMarketplaceCategoryIds(
+            asMetricsRecord(row.metricsRaw ?? null) ?? {},
+          )) ?? [],
+    ),
     bio: row.bio,
     source: row.source,
     enabled: row.enabled,

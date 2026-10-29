@@ -238,6 +238,14 @@ export async function syncDiscoveryFromTikTok(
         skipped += 1;
         continue;
       }
+      // TikTok often returns category_ids: [] for low-signal creators; when the
+      // sync itself was category-filtered, stamp those parent ids as a fallback.
+      if (
+        !mapped.categories.length &&
+        options.categoryIds?.length
+      ) {
+        mapped.categories = options.categoryIds.map(String).filter(Boolean);
+      }
       try {
         const { created } = await upsertDiscoveryProfile(mapped, {
           markCrawled: options.markCrawled === true,
@@ -434,6 +442,10 @@ export async function refreshOrgCreatorMetrics(input: {
         },
         update: {
           ...discoveryMetricsUpdateData(mapped),
+          // Performance payloads often omit niches — keep existing categories.
+          categories: mapped.categories.length
+            ? mapped.categories
+            : undefined,
           bio: mapped.bio ?? undefined,
           source: "tiktok_affiliate_api",
           enabled: true,

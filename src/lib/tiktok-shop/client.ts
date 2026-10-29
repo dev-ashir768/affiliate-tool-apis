@@ -422,8 +422,19 @@ export async function searchMarketplaceCreators(input: {
     body.units_sold_ranges = input.unitsSoldRanges;
   }
   if (input.categoryIds?.length) {
-    body.category = input.categoryIds.map((id) => ({ id: String(id) }));
+    // Official filter shape: parent_category_id (+ optional child list).
+    body.category = input.categoryIds.map((id) => ({
+      parent_category_id: String(id),
+    }));
   }
+  // Ensure BASIC includes category_ids even when callers omit data_groups.
+  body.data_groups = [
+    "BASIC_CREATOR_INFORMATION",
+    "CONTENT_PERFORMANCE",
+    "FOLLOWER_INFORMATION",
+    "COLLABORATION",
+    "SALES_AND_GMV",
+  ];
 
   const data = await tikTokFetch<{
     creators?: MarketplaceCreator[];
