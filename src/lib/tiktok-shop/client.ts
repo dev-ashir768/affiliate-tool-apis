@@ -676,11 +676,136 @@ export async function createTargetCollaboration(
   };
 }
 
+export type ShopProductSkuSummary = {
+  id: string;
+  sellerSku: string | null;
+  status: string | null;
+  priceAmount: string | null;
+  priceCurrency: string | null;
+  inventoryQuantity: number | null;
+  warehouseId: string | null;
+};
+
 export type ShopProductSummary = {
   id: string;
   title: string | null;
   status: string | null;
+  auditStatus: string | null;
+  listingQualityTier: string | null;
+  sellingFormat: string | null;
+  isNotForSale: boolean | null;
+  salesRegions: string[];
+  createTime: number | null;
+  updateTime: number | null;
+  skus: ShopProductSkuSummary[];
+  /** Convenience fields from the first SKU for table display. */
+  primarySellerSku: string | null;
+  primaryPriceAmount: string | null;
+  primaryPriceCurrency: string | null;
+  totalInventory: number | null;
 };
+
+function mapShopProduct(raw: Record<string, unknown>): ShopProductSummary | null {
+  const id = raw.id != null ? String(raw.id) : "";
+  if (!id) return null;
+
+  const audit =
+    raw.audit && typeof raw.audit === "object" && !Array.isArray(raw.audit)
+      ? (raw.audit as Record<string, unknown>)
+      : null;
+  const salesRegions = Array.isArray(raw.sales_regions)
+    ? raw.sales_regions.map((r) => String(r)).filter(Boolean)
+    : [];
+
+  const skusRaw = Array.isArray(raw.skus) ? raw.skus : [];
+  const skus: ShopProductSkuSummary[] = [];
+  for (const item of skusRaw) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const s = item as Record<string, unknown>;
+    const skuId = s.id != null ? String(s.id) : "";
+    if (!skuId) continue;
+    const price =
+      s.price && typeof s.price === "object" && !Array.isArray(s.price)
+        ? (s.price as Record<string, unknown>)
+        : null;
+    const statusInfo =
+      s.status_info &&
+      typeof s.status_info === "object" &&
+      !Array.isArray(s.status_info)
+        ? (s.status_info as Record<string, unknown>)
+        : null;
+    const inventory = Array.isArray(s.inventory) ? s.inventory : [];
+    let inventoryQuantity: number | null = null;
+    let warehouseId: string | null = null;
+    for (const inv of inventory) {
+      if (!inv || typeof inv !== "object" || Array.isArray(inv)) continue;
+      const row = inv as Record<string, unknown>;
+      const q = row.quantity;
+      if (typeof q === "number" && Number.isFinite(q)) {
+        inventoryQuantity = (inventoryQuantity ?? 0) + Math.round(q);
+      }
+      if (warehouseId == null && row.warehouse_id != null) {
+        warehouseId = String(row.warehouse_id);
+      }
+    }
+    skus.push({
+      id: skuId,
+      sellerSku:
+        typeof s.seller_sku === "string" && s.seller_sku.trim()
+          ? s.seller_sku.trim()
+          : null,
+      status:
+        (typeof statusInfo?.status === "string" && statusInfo.status) ||
+        (typeof s.status === "string" ? s.status : null),
+      priceAmount:
+        typeof price?.tax_exclusive_price === "string"
+          ? price.tax_exclusive_price
+          : typeof price?.sale_price === "string"
+            ? price.sale_price
+            : null,
+      priceCurrency:
+        typeof price?.currency === "string" ? price.currency : null,
+      inventoryQuantity,
+      warehouseId,
+    });
+  }
+
+  const primary = skus[0] ?? null;
+  const totalInventory = skus.reduce<number | null>((sum, s) => {
+    if (s.inventoryQuantity == null) return sum;
+    return (sum ?? 0) + s.inventoryQuantity;
+  }, null);
+
+  return {
+    id,
+    title: typeof raw.title === "string" ? raw.title : null,
+    status: typeof raw.status === "string" ? raw.status : null,
+    auditStatus:
+      typeof audit?.status === "string" ? String(audit.status) : null,
+    listingQualityTier:
+      typeof raw.listing_quality_tier === "string"
+        ? raw.listing_quality_tier
+        : null,
+    sellingFormat:
+      typeof raw.selling_format === "string" ? raw.selling_format : null,
+    isNotForSale:
+      typeof raw.is_not_for_sale === "boolean" ? raw.is_not_for_sale : null,
+    salesRegions,
+    createTime:
+      typeof raw.create_time === "number" && Number.isFinite(raw.create_time)
+        ? raw.create_time
+        : null,
+    updateTime:
+      typeof raw.update_time === "number" && Number.isFinite(raw.update_time)
+        ? raw.update_time
+        : null,
+    skus,
+    primarySellerSku: primary?.sellerSku ?? null,
+    primaryPriceAmount: primary?.priceAmount ?? null,
+    primaryPriceCurrency: primary?.priceCurrency ?? null,
+    totalInventory,
+  };
+}
 
 export async function searchShopProducts(input: {
   credentials: TikTokShopCredentials;
@@ -702,12 +827,9 @@ export async function searchShopProducts(input: {
   }
 
   const data = await tikTokFetch<{
-    products?: Array<{
-      id?: string;
-      title?: string;
-      status?: string;
-    }>;
+    products?: Array<Record<string, unknown>>;
     next_page_token?: string;
+    total_count?: number;
   }>(PRODUCT_SEARCH_PATH, {
     method: "POST",
     query,
@@ -717,12 +839,8 @@ export async function searchShopProducts(input: {
 
   return {
     products: (data?.products ?? [])
-      .filter((p) => p.id)
-      .map((p) => ({
-        id: String(p.id),
-        title: p.title ?? null,
-        status: p.status ?? null,
-      })),
+      .map((p) => mapShopProduct(p))
+      .filter((p): p is ShopProductSummary => Boolean(p)),
     nextPageToken: data?.next_page_token || null,
   };
 }
