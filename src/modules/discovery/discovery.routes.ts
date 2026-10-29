@@ -29,6 +29,7 @@ import {
   enqueueDiscoveryTikTokSync,
   getDiscoverySyncQueueStatus,
   getDiscoveryTikTokStatus,
+  getOrgDiscoveryJobStatus,
   getOrgDiscoveryTikTokStatus,
   refreshOrgCreatorMetrics,
   syncDiscoveryFromTikTok,
@@ -110,6 +111,27 @@ discoveryRoutes.get(
         throw new AppError("UNAUTHORIZED", "Missing org", 401);
       }
       res.json(await getOrgDiscoveryTikTokStatus(req.auth.orgId));
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+discoveryRoutes.get(
+  "/jobs/:jobId",
+  authenticate,
+  requireOrg,
+  async (req, res, next) => {
+    try {
+      if (!req.auth?.orgId) {
+        throw new AppError("UNAUTHORIZED", "Missing org", 401);
+      }
+      res.json(
+        await getOrgDiscoveryJobStatus(
+          req.auth.orgId,
+          String(req.params.jobId),
+        ),
+      );
     } catch (err) {
       next(err);
     }

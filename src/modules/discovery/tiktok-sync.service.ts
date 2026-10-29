@@ -598,6 +598,113 @@ export async function getDiscoverySyncQueueStatus() {
   };
 }
 
+export type OrgDiscoveryJobStatus = {
+  jobId: string;
+  queue: string;
+  name: string;
+  kind: "discovery_sync" | "crm_metrics_refresh" | "other";
+  status: "QUEUED" | "RUNNING" | "COMPLETED" | "FAILED" | "UNKNOWN";
+  requestedAt: string | null;
+  startedAt: string | null;
+  finishedAt: string | null;
+  failedReason: string | null;
+  result: Record<string, unknown> | null;
+};
+
+function mapBullStateToStatus(
+  state: string,
+): OrgDiscoveryJobStatus["status"] {
+  if (state === "completed") return "COMPLETED";
+  if (state === "failed") return "FAILED";
+  if (state === "active") return "RUNNING";
+  if (
+    state === "waiting" ||
+    state === "delayed" ||
+    state === "paused" ||
+    state === "waiting-children" ||
+    state === "prioritized"
+  ) {
+    return "QUEUED";
+  }
+  return "UNKNOWN";
+}
+
+function resolveJobOrganizationId(data: {
+  organizationId?: string;
+  options?: { organizationId?: string | null };
+}): string | null {
+  if (typeof data.organizationId === "string" && data.organizationId) {
+    return data.organizationId;
+  }
+  const nested = data.options?.organizationId;
+  return typeof nested === "string" && nested ? nested : null;
+}
+
+function resolveJobKind(
+  name: string,
+  mode: string | undefined,
+): OrgDiscoveryJobStatus["kind"] {
+  if (mode === "crm_metrics_refresh" || name === "tiktok-crm-metrics-refresh") {
+    return "crm_metrics_refresh";
+  }
+  if (name === "tiktok-marketplace-sync" && !mode) {
+    return "discovery_sync";
+  }
+  if (!mode) return "discovery_sync";
+  return "other";
+}
+
+/** Org-scoped job lookup — 404 if missing or belongs to another org. */
+export async function getOrgDiscoveryJobStatus(
+  organizationId: string,
+  jobId: string,
+): Promise<OrgDiscoveryJobStatus> {
+  const queue = getDiscoverySyncQueue();
+  const job = await queue.getJob(jobId);
+  if (!job) {
+    throw new AppError("NOT_FOUND", "Job not found", 404);
+  }
+
+  const data = (job.data ?? {}) as {
+    organizationId?: string;
+    triggeredBy?: string;
+    requestedAt?: string;
+    mode?: string;
+    options?: { organizationId?: string | null };
+  };
+
+  const jobOrgId = resolveJobOrganizationId(data);
+  if (!jobOrgId || jobOrgId !== organizationId) {
+    throw new AppError("NOT_FOUND", "Job not found", 404);
+  }
+
+  const state = await job.getState();
+  const returnvalue =
+    job.returnvalue &&
+    typeof job.returnvalue === "object" &&
+    !Array.isArray(job.returnvalue)
+      ? (job.returnvalue as Record<string, unknown>)
+      : null;
+
+  return {
+    jobId: job.id != null ? String(job.id) : jobId,
+    queue: DISCOVERY_SYNC_QUEUE,
+    name: job.name,
+    kind: resolveJobKind(job.name, data.mode),
+    status: mapBullStateToStatus(state),
+    requestedAt:
+      typeof data.requestedAt === "string" ? data.requestedAt : null,
+    startedAt: job.processedOn
+      ? new Date(job.processedOn).toISOString()
+      : null,
+    finishedAt: job.finishedOn
+      ? new Date(job.finishedOn).toISOString()
+      : null,
+    failedReason: job.failedReason ?? null,
+    result: returnvalue,
+  };
+}
+
 export async function getOrgDiscoveryTikTokStatus(organizationId: string) {
   const config = getTikTokShopConfigStatus();
   const shops = await prisma.shop.findMany({
