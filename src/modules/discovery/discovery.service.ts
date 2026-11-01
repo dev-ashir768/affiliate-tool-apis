@@ -15,6 +15,7 @@ import {
   type TikTokUnitsSoldRange,
 } from "../../lib/tiktok-shop/marketplace-filters.js";
 import { extractMarketplaceCategoryIds } from "./creator-metrics.js";
+import { updatedAtBounds } from "./discovery-date-bounds.js";
 import { formatMarketplaceCategories } from "./marketplace-categories.js";
 
 /** Local shapes so mapping stays valid if the TS server lags behind `prisma generate`. */
@@ -63,6 +64,7 @@ type DiscoveryWhereClause = {
 type DiscoveryWhere = {
   enabled?: boolean;
   region?: "US" | "UK";
+  updatedAt?: { gte?: Date; lt?: Date };
   handle?: { in: string[] } | { notIn: string[] };
   followerCount?: IntFilter;
   unitsSold?: IntFilter;
@@ -256,6 +258,8 @@ export async function searchDiscovery(params: {
   hasEmail?: boolean;
   /** true = only CRM-saved handles; false = not yet saved for this org. */
   savedToCrm?: boolean;
+  updatedFrom?: string;
+  updatedTo?: string;
   sortBy?: "followers" | "units" | "updated" | "gmv";
   enabledOnly?: boolean;
   organizationId?: string;
@@ -386,6 +390,14 @@ export async function searchDiscovery(params: {
     });
   }
   if (andClauses.length) where.AND = andClauses;
+
+  const atBounds = updatedAtBounds(params.updatedFrom, params.updatedTo);
+  if (atBounds.gte || atBounds.lt) {
+    where.updatedAt = {
+      ...(atBounds.gte ? { gte: atBounds.gte } : {}),
+      ...(atBounds.lt ? { lt: atBounds.lt } : {}),
+    };
+  }
 
   const orderBy: DiscoveryOrderBy[] =
     params.sortBy === "units"

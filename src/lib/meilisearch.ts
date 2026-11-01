@@ -8,6 +8,7 @@ import {
   isTikTokUnitsSoldRange,
   unitsSoldBoundsForRange,
 } from "./tiktok-shop/marketplace-filters.js";
+import { updatedAtBounds } from "../modules/discovery/discovery-date-bounds.js";
 
 export type DiscoverySearchDoc = {
   id: string;
@@ -71,6 +72,7 @@ async function ensureIndex(): Promise<Index<DiscoverySearchDoc> | null> {
           "gmvCents",
           "source",
           "contactEmail",
+          "updatedAt",
         ],
         sortableAttributes: [
           "followerCount",
@@ -191,6 +193,8 @@ export type MeiliDiscoverySearchParams = {
   unitsSoldRange?: string;
   gmvRangeContains?: string;
   hasEmail?: boolean;
+  updatedFrom?: string;
+  updatedTo?: string;
   sortBy?: "followers" | "units" | "updated" | "gmv";
   enabledOnly?: boolean;
 };
@@ -234,6 +238,10 @@ export async function searchDiscoveryInMeili(
   } else if (params.hasEmail === false) {
     filters.push("contactEmail IS EMPTY");
   }
+
+  const atBounds = updatedAtBounds(params.updatedFrom, params.updatedTo);
+  if (atBounds.gte) filters.push(`updatedAt >= ${atBounds.gte.getTime()}`);
+  if (atBounds.lt) filters.push(`updatedAt < ${atBounds.lt.getTime()}`);
 
   const sort =
     params.sortBy === "units"

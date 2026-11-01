@@ -40,6 +40,16 @@ export const discoverySearchSchema = z.object({
       if (typeof v === "boolean") return v;
       return v === "true";
     }),
+  /** Inclusive lower bound on profile updatedAt (`yyyy-MM-dd`). */
+  updatedFrom: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, "updatedFrom must be yyyy-MM-dd")
+    .optional(),
+  /** Inclusive upper bound on profile updatedAt (`yyyy-MM-dd`). */
+  updatedTo: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, "updatedTo must be yyyy-MM-dd")
+    .optional(),
   sortBy: z
     .enum(["followers", "units", "updated", "gmv"])
     .optional()
