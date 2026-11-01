@@ -7,6 +7,23 @@ import {
 const tikTokGmvRangeSchema = z.enum(TIKTOK_GMV_RANGES);
 const tikTokUnitsSoldRangeSchema = z.enum(TIKTOK_UNITS_SOLD_RANGES);
 
+export function isYyyyMmDdCalendarDate(value: string): boolean {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) return false;
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+
+  return (
+    !Number.isNaN(parsed.getTime()) &&
+    parsed.getUTCFullYear() === year &&
+    parsed.getUTCMonth() === month - 1 &&
+    parsed.getUTCDate() === day
+  );
+}
+
 export const discoverySearchSchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(20),
@@ -44,11 +61,13 @@ export const discoverySearchSchema = z.object({
   updatedFrom: z
     .string()
     .regex(/^\d{4}-\d{2}-\d{2}$/, "updatedFrom must be yyyy-MM-dd")
+    .refine(isYyyyMmDdCalendarDate, "updatedFrom must be a valid calendar date")
     .optional(),
   /** Inclusive upper bound on profile updatedAt (`yyyy-MM-dd`). */
   updatedTo: z
     .string()
     .regex(/^\d{4}-\d{2}-\d{2}$/, "updatedTo must be yyyy-MM-dd")
+    .refine(isYyyyMmDdCalendarDate, "updatedTo must be a valid calendar date")
     .optional(),
   sortBy: z
     .enum(["followers", "units", "updated", "gmv"])
