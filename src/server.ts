@@ -10,6 +10,7 @@ import {
   automationRunQueue,
   discoverySyncQueue,
   outreachSendQueue,
+  shopOpenCollabCreatorsQueue,
   shopVerifyQueue,
 } from "./lib/queue.js";
 import { closeAllBotActivations } from "./modules/shops/bot-activation.service.js";
@@ -46,6 +47,7 @@ async function shutdown(signal: string) {
       closeAllBotActivations(),
       shopVerifyQueue.close(),
       discoverySyncQueue.close(),
+      shopOpenCollabCreatorsQueue.close(),
       outreachSendQueue.close(),
       affiliateInviteQueue.close(),
       automationRunQueue.close(),

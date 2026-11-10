@@ -40,6 +40,22 @@ export const TARGET_COLLAB_DETAIL_PATH = (id: string) =>
   `/affiliate_seller/202508/target_collaborations/${encodeURIComponent(id)}`;
 
 /**
+ * Search Open Collaborations (seller).
+ * @see https://partner.tiktokshop.com/docv2/page/search-open-collaborations-202508
+ * Scope: seller.affiliate_collaboration.read
+ */
+export const OPEN_COLLAB_SEARCH_PATH =
+  "/affiliate_seller/202508/open_collaborations/search";
+
+/**
+ * Get Open Collaboration Creator Content Details.
+ * @see https://partner.tiktokshop.com/docv2/page/get-open-collaboration-creator-content-details-202508
+ * Scope: seller.affiliate_collaboration.read
+ */
+export const OPEN_COLLAB_CREATOR_CONTENT_PATH =
+  "/affiliate_seller/202508/open_collaborations/creator_content_details";
+
+/**
  * Product catalog search (invite product picker).
  * @see https://partner.tiktokshop.com/docv2/page/search-products-202502
  * Scope: seller.product.basic
@@ -856,6 +872,91 @@ export async function getTargetCollaborationDetail(input: {
     credentials: input.credentials,
   });
   return data?.target_collaboration ?? {};
+}
+
+export async function searchOpenCollaborations(input: {
+  credentials: TikTokShopCredentials;
+  pageSize?: number;
+  pageToken?: string | null;
+}): Promise<{
+  items: Array<{ id: string; productId: string }>;
+  nextPageToken: string | null;
+  totalCount: number | null;
+}> {
+  const pageSize = Math.min(Math.max(input.pageSize ?? 50, 1), 100);
+  const query: Record<string, string> = { page_size: String(pageSize) };
+  if (input.pageToken) query.page_token = input.pageToken;
+
+  const data = await tikTokFetch<{
+    open_collaborations?: Array<Record<string, unknown>>;
+    next_page_token?: string;
+    total_count?: number;
+  }>(OPEN_COLLAB_SEARCH_PATH, {
+    method: "POST",
+    query,
+    body: {},
+    credentials: input.credentials,
+  });
+
+  const items = (data?.open_collaborations ?? [])
+    .map((row) => {
+      const id = row.id != null ? String(row.id) : "";
+      const product =
+        row.product && typeof row.product === "object"
+          ? (row.product as Record<string, unknown>)
+          : null;
+      const productId =
+        product?.id != null
+          ? String(product.id)
+          : row.product_id != null
+            ? String(row.product_id)
+            : "";
+      if (!productId) return null;
+      return { id: id || productId, productId };
+    })
+    .filter((x): x is { id: string; productId: string } => Boolean(x));
+
+  return {
+    items,
+    nextPageToken: data?.next_page_token || null,
+    totalCount:
+      typeof data?.total_count === "number" ? data.total_count : null,
+  };
+}
+
+export async function getOpenCollabCreatorContentDetails(input: {
+  credentials: TikTokShopCredentials;
+  productId: string;
+  pageSize?: number;
+  pageToken?: string | null;
+}): Promise<{
+  creators: Array<Record<string, unknown>>;
+  nextPageToken: string | null;
+  totalCount: number | null;
+}> {
+  const pageSize = Math.min(Math.max(input.pageSize ?? 100, 1), 100);
+  const query: Record<string, string> = {
+    page_size: String(pageSize),
+    product_id: input.productId,
+  };
+  if (input.pageToken) query.page_token = input.pageToken;
+
+  const data = await tikTokFetch<{
+    creator_content_details?: Array<Record<string, unknown>>;
+    next_page_token?: string;
+    total_count?: number;
+  }>(OPEN_COLLAB_CREATOR_CONTENT_PATH, {
+    method: "GET",
+    query,
+    credentials: input.credentials,
+  });
+
+  return {
+    creators: data?.creator_content_details ?? [],
+    nextPageToken: data?.next_page_token || null,
+    totalCount:
+      typeof data?.total_count === "number" ? data.total_count : null,
+  };
 }
 
 export type TikTokConversationSummary = {

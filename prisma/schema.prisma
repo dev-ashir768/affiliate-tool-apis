@@ -357,6 +357,8 @@ model Shop {
   tiktokRefreshExpiresAt DateTime?
   tiktokGrantedScopes    String[]     @default([])
   oauthConnectedAt       DateTime?
+  /// Last open-collab → CRM creators sync summary (JSON).
+  openCollabCreatorsSync Json?
   verificationJobs       ShopVerificationJob[]
   shopOrders             ShopOrder[]
   affiliateInvites       AffiliateInvite[]
