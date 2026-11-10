@@ -30,6 +30,7 @@ vi.mock("../../src/lib/tiktok-shop/client.js", () => ({
   getOpenCollabCreatorContentDetails: vi.fn(),
 }));
 
+import { AppError } from "../../src/lib/errors.js";
 import { prisma } from "../../src/lib/prisma.js";
 import {
   getOpenCollabCreatorContentDetails,
@@ -239,6 +240,48 @@ describe("open-collab creator sync", () => {
       failedProducts: 1,
     });
   });
+
+  it.each(["UNAUTHORIZED", "FORBIDDEN"] as const)(
+    "aborts the run as FAILED when a product fetch fails with %s",
+    async (code) => {
+      vi.mocked(searchOpenCollaborations).mockResolvedValue({
+        items: [
+          { id: "oc1", productId: "p1" },
+          { id: "oc2", productId: "p2" },
+        ],
+        nextPageToken: null,
+        totalCount: 2,
+      });
+      vi.mocked(getOpenCollabCreatorContentDetails).mockRejectedValueOnce(
+        new AppError(
+          code,
+          "TikTok access denied: app or token missing required scope.",
+          code === "FORBIDDEN" ? 403 : 401,
+        ),
+      );
+
+      await expect(
+        runOpenCollabCreatorsSync({
+          organizationId: "org1",
+          shopId: "shop1",
+        }),
+      ).rejects.toMatchObject({ code });
+
+      // The run aborts immediately instead of scanning further products.
+      expect(getOpenCollabCreatorContentDetails).toHaveBeenCalledTimes(1);
+
+      const lastPersist = vi.mocked(prisma.shop.update).mock.calls.at(-1)?.[0];
+      expect(lastPersist).toMatchObject({
+        data: {
+          openCollabCreatorsSync: {
+            status: "FAILED",
+            failedProducts: 0,
+            lastError: expect.stringContaining("missing required scope"),
+          },
+        },
+      });
+    },
+  );
 
   it("ignores duplicate list membership errors", async () => {
     vi.mocked(prisma.creatorListMember.create).mockRejectedValue({

@@ -4,6 +4,16 @@ function asRecord(v: unknown): Record<string, unknown> | null {
     : null;
 }
 
+/** Non-numeric strings (and NaN/Infinity) map to null, never NaN. */
+function toFiniteCount(value: unknown): number | null {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : null;
+  }
+  if (value == null || String(value).trim() === "") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 export function mapOpenCollabCreator(raw: Record<string, unknown>): {
   handle: string;
   displayName: string | null;
@@ -34,12 +44,7 @@ export function mapOpenCollabCreator(raw: Record<string, unknown>): {
     handle,
     displayName: nickname != null ? String(nickname) : null,
     creatorOpenId: openId != null ? String(openId) : null,
-    followerCount:
-      typeof followers === "number"
-        ? followers
-        : followers != null && String(followers).trim() !== ""
-          ? Number(followers)
-          : null,
+    followerCount: toFiniteCount(followers),
     avatarUrl,
   };
 }

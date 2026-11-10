@@ -29,4 +29,33 @@ describe("mapOpenCollabCreator", () => {
       }),
     ).toBeNull();
   });
+
+  it("parses numeric string follower counts", () => {
+    const mapped = mapOpenCollabCreator({
+      creator_profile: { username: "alice", fans_cnt: "1200" },
+    });
+    expect(mapped?.followerCount).toBe(1200);
+  });
+
+  it("maps non-numeric follower counts to null instead of NaN", () => {
+    const mapped = mapOpenCollabCreator({
+      creator_profile: { username: "alice", follower_count: "not-a-number" },
+    });
+    expect(mapped).not.toBeNull();
+    expect(mapped?.followerCount).toBeNull();
+    expect(mapped?.followerCount).not.toBeNaN();
+  });
+
+  it("maps blank and non-finite follower counts to null", () => {
+    expect(
+      mapOpenCollabCreator({
+        creator_profile: { username: "alice", follower_count: "   " },
+      })?.followerCount,
+    ).toBeNull();
+    expect(
+      mapOpenCollabCreator({
+        creator_profile: { username: "alice", follower_count: NaN },
+      })?.followerCount,
+    ).toBeNull();
+  });
 });

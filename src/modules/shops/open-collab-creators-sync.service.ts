@@ -63,6 +63,18 @@ function isPrismaUniqueConstraintError(error: unknown): boolean {
   );
 }
 
+/**
+ * Auth/scope failures (expired/invalid token, missing scope, IP allow list)
+ * fail every remaining TikTok call, so continuing would misreport the run as
+ * PARTIAL; abort as FAILED instead.
+ */
+function isNonRetryableAuthError(error: unknown): error is AppError {
+  return (
+    error instanceof AppError &&
+    (error.code === "UNAUTHORIZED" || error.code === "FORBIDDEN")
+  );
+}
+
 function statusJson(
   status: OpenCollabCreatorsSyncStatus,
 ): Prisma.InputJsonValue {
@@ -271,7 +283,20 @@ export async function runOpenCollabCreatorsSync(
           break;
         }
       } while (creatorPageToken !== null);
-    } catch {
+    } catch (error) {
+      if (isNonRetryableAuthError(error)) {
+        const failedStatus: OpenCollabCreatorsSyncStatus = {
+          status: "FAILED",
+          productsScanned,
+          creatorsUpserted: 0,
+          creatorsLinkedToList: 0,
+          failedProducts,
+          lastError: error.message,
+          updatedAt: new Date().toISOString(),
+        };
+        await persistSyncStatus(job.organizationId, job.shopId, failedStatus);
+        throw error;
+      }
       failedProducts += 1;
     }
   }
