@@ -100,6 +100,11 @@ export type OpenCollabCreatorsSyncEnqueueResult = {
   shopId: string;
 };
 
+/** BullMQ 6 rejects custom job ids containing `:`. */
+export function openCollabCreatorsSyncJobId(shopId: string): string {
+  return `shop-open-collab-creators-${shopId}`;
+}
+
 export async function enqueueOpenCollabCreatorsSync(
   organizationId: string,
   shopId: string,
@@ -117,7 +122,7 @@ export async function enqueueOpenCollabCreatorsSync(
     );
   }
 
-  const jobId = `shop-open-collab-creators:${shopId}`;
+  const jobId = openCollabCreatorsSyncJobId(shopId);
   const existing = await getShopOpenCollabCreatorsQueue().getJob(jobId);
   if (existing) {
     const state = await existing.getState();

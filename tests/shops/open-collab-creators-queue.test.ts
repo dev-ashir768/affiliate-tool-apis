@@ -46,7 +46,7 @@ describe("open-collab creator sync queue", () => {
     } as never);
     vi.mocked(prisma.shop.update).mockResolvedValue({} as never);
     queue.add.mockResolvedValue({
-      id: "shop-open-collab-creators:shop1",
+      id: "shop-open-collab-creators-shop1",
     });
   });
 
@@ -58,7 +58,7 @@ describe("open-collab creator sync queue", () => {
     await expect(
       enqueueOpenCollabCreatorsSync("org1", "shop1", "user1"),
     ).resolves.toEqual({
-      jobId: "shop-open-collab-creators:shop1",
+      jobId: "shop-open-collab-creators-shop1",
       status: "RUNNING",
       shopId: "shop1",
     });
@@ -87,7 +87,7 @@ describe("open-collab creator sync queue", () => {
         triggeredBy: "user1",
       }),
       {
-        jobId: "shop-open-collab-creators:shop1",
+        jobId: "shop-open-collab-creators-shop1",
         removeOnComplete: 50,
         removeOnFail: 50,
         attempts: 2,
@@ -99,12 +99,12 @@ describe("open-collab creator sync queue", () => {
       data: {
         openCollabCreatorsSync: expect.objectContaining({
           status: "QUEUED",
-          jobId: "shop-open-collab-creators:shop1",
+          jobId: "shop-open-collab-creators-shop1",
         }),
       },
     });
     expect(result).toEqual({
-      jobId: "shop-open-collab-creators:shop1",
+      jobId: "shop-open-collab-creators-shop1",
       status: "QUEUED",
       shopId: "shop1",
     });

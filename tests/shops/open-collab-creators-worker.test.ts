@@ -28,7 +28,7 @@ describe("open-collab creator sync worker", () => {
 
     await expect(
       processShopOpenCollabCreators({
-        id: "shop-open-collab-creators:shop1",
+        id: "shop-open-collab-creators-shop1",
         data,
       } as Job<ShopOpenCollabCreatorsJobData>),
     ).rejects.toBe(error);
@@ -38,7 +38,7 @@ describe("open-collab creator sync worker", () => {
       "shop1",
       expect.objectContaining({
         status: "FAILED",
-        jobId: "shop-open-collab-creators:shop1",
+        jobId: "shop-open-collab-creators-shop1",
         productsScanned: 0,
         creatorsUpserted: 0,
         creatorsLinkedToList: 0,
