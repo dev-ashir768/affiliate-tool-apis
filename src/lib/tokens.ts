@@ -87,8 +87,28 @@ export async function verifyAccessToken(token: string): Promise<AccessClaims> {
   return claimsFromPayload(payload);
 }
 
-export async function signMfaPendingToken(userId: string): Promise<string> {
-  return new SignJWT({ purpose: "mfa_pending" })
+export type MfaPendingClaims = {
+  sub: string;
+  breakGlass?: true;
+  targetUserId?: string;
+};
+
+export async function signMfaPendingToken(
+  userId: string,
+  opts?: { breakGlass: true; targetUserId: string },
+): Promise<string> {
+  if (opts?.breakGlass) {
+    const targetUserId = opts.targetUserId?.trim();
+    if (!targetUserId) {
+      throw new Error("breakGlass mfa_pending requires targetUserId");
+    }
+  }
+  return new SignJWT({
+    purpose: "mfa_pending",
+    ...(opts?.breakGlass
+      ? { breakGlass: true, targetUserId: opts.targetUserId.trim() }
+      : {}),
+  })
     .setProtectedHeader({ alg: algorithm() })
     .setSubject(userId)
     .setIssuedAt()
@@ -98,14 +118,25 @@ export async function signMfaPendingToken(userId: string): Promise<string> {
 
 export async function verifyMfaPendingToken(
   token: string,
-): Promise<{ sub: string }> {
+): Promise<MfaPendingClaims> {
   const { payload } = await jwtVerify(token, await getVerifyKey(), {
     algorithms: [algorithm()],
   });
   if (payload.purpose !== "mfa_pending" || !payload.sub) {
     throw new Error("Invalid mfa pending token");
   }
-  return { sub: String(payload.sub) };
+  const breakGlass = payload.breakGlass === true;
+  const targetUserId =
+    typeof payload.targetUserId === "string" && payload.targetUserId
+      ? payload.targetUserId
+      : undefined;
+  if (breakGlass && !targetUserId) {
+    throw new Error("Invalid mfa pending token");
+  }
+  return {
+    sub: String(payload.sub),
+    ...(breakGlass ? { breakGlass: true as const, targetUserId } : {}),
+  };
 }
 
 /**
