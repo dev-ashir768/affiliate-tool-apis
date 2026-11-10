@@ -12,6 +12,16 @@ export const SHOP_COLLABORATORS_LIST_NAME = "Shop collaborators";
 export const MAX_OPEN_COLLAB_PRODUCTS = 500;
 export const MAX_UNIQUE_CREATORS = 10_000;
 
+export type OpenCollabCreatorsSyncLimits = {
+  maxProducts: number;
+  maxCreators: number;
+};
+
+const DEFAULT_SYNC_LIMITS: OpenCollabCreatorsSyncLimits = {
+  maxProducts: MAX_OPEN_COLLAB_PRODUCTS,
+  maxCreators: MAX_UNIQUE_CREATORS,
+};
+
 export type OpenCollabCreatorsSyncStatus = {
   status: "QUEUED" | "RUNNING" | "SUCCEEDED" | "PARTIAL" | "FAILED";
   jobId?: string | null;
@@ -80,10 +90,13 @@ export async function getOpenCollabCreatorsSyncStatus(
   );
 }
 
-export async function runOpenCollabCreatorsSync(job: {
-  organizationId: string;
-  shopId: string;
-}): Promise<OpenCollabCreatorsSyncStatus> {
+export async function runOpenCollabCreatorsSync(
+  job: {
+    organizationId: string;
+    shopId: string;
+  },
+  limits: OpenCollabCreatorsSyncLimits = DEFAULT_SYNC_LIMITS,
+): Promise<OpenCollabCreatorsSyncStatus> {
   const shop = await prisma.shop.findFirst({
     where: { id: job.shopId, organizationId: job.organizationId },
   });
@@ -123,7 +136,7 @@ export async function runOpenCollabCreatorsSync(job: {
     });
     for (const item of page.items) {
       if (seenProductIds.has(item.productId)) continue;
-      if (productIds.length >= MAX_OPEN_COLLAB_PRODUCTS) {
+      if (productIds.length >= limits.maxProducts) {
         productCapHit = true;
         break;
       }
@@ -132,14 +145,14 @@ export async function runOpenCollabCreatorsSync(job: {
     }
     productPageToken = page.nextPageToken;
     if (
-      productIds.length >= MAX_OPEN_COLLAB_PRODUCTS &&
+      productIds.length >= limits.maxProducts &&
       productPageToken !== null
     ) {
       productCapHit = true;
     }
   } while (
     productPageToken !== null &&
-    productIds.length < MAX_OPEN_COLLAB_PRODUCTS
+    productIds.length < limits.maxProducts
   );
 
   const creators = new Map<string, MappedCreator>();
@@ -167,7 +180,7 @@ export async function runOpenCollabCreatorsSync(job: {
             creators.set(key, creator);
             continue;
           }
-          if (creators.size >= MAX_UNIQUE_CREATORS) {
+          if (creators.size >= limits.maxCreators) {
             creatorCapHit = true;
             continue;
           }
@@ -175,7 +188,7 @@ export async function runOpenCollabCreatorsSync(job: {
         }
         creatorPageToken = page.nextPageToken;
         if (
-          creators.size >= MAX_UNIQUE_CREATORS &&
+          creators.size >= limits.maxCreators &&
           creatorPageToken !== null
         ) {
           creatorCapHit = true;
@@ -187,36 +200,72 @@ export async function runOpenCollabCreatorsSync(job: {
     }
   }
 
-  const list =
-    (await prisma.creatorList.findUnique({
-      where: {
-        organizationId_name: {
+  const listWhere = {
+    organizationId_name: {
+      organizationId: job.organizationId,
+      name: SHOP_COLLABORATORS_LIST_NAME,
+    },
+  };
+  let list = await prisma.creatorList.findUnique({
+    where: listWhere,
+  });
+  if (!list) {
+    try {
+      list = await prisma.creatorList.create({
+        data: {
           organizationId: job.organizationId,
           name: SHOP_COLLABORATORS_LIST_NAME,
         },
-      },
-    })) ??
-    (await prisma.creatorList.create({
-      data: {
-        organizationId: job.organizationId,
-        name: SHOP_COLLABORATORS_LIST_NAME,
-      },
-    }));
+      });
+    } catch (error) {
+      if (!isPrismaUniqueConstraintError(error)) throw error;
+      list = await prisma.creatorList.findUnique({
+        where: listWhere,
+      });
+      if (!list) throw error;
+    }
+  }
 
   let creatorsUpserted = 0;
   let creatorsLinkedToList = 0;
   for (const creator of creators.values()) {
-    const existing = await prisma.creator.findUnique({
-      where: {
-        organizationId_platform_handle: {
-          organizationId: job.organizationId,
-          platform: "TIKTOK",
-          handle: creator.handle,
-        },
+    const creatorWhere = {
+      organizationId_platform_handle: {
+        organizationId: job.organizationId,
+        platform: "TIKTOK" as const,
+        handle: creator.handle,
       },
-    });
+    };
+    let existing = await prisma.creator.findUnique({ where: creatorWhere });
 
     let creatorId: string;
+    if (!existing) {
+      try {
+        const created = await prisma.creator.create({
+          data: {
+            organizationId: job.organizationId,
+            platform: "TIKTOK",
+            handle: creator.handle,
+            displayName: creator.displayName,
+            creatorOpenId: creator.creatorOpenId,
+            followerCount: creator.followerCount,
+            avatarUrl: creator.avatarUrl,
+            stage: "ACTIVE",
+          },
+        });
+        creatorId = created.id;
+      } catch (error) {
+        if (!isPrismaUniqueConstraintError(error)) throw error;
+        existing = await prisma.creator.findUnique({
+          where: creatorWhere,
+        });
+        if (!existing) throw error;
+        creatorId = existing.id;
+      }
+    } else {
+      creatorId = existing.id;
+    }
+
     if (existing) {
       const data: Prisma.CreatorUpdateInput = {};
       if (creator.displayName !== null) data.displayName = creator.displayName;
@@ -230,20 +279,6 @@ export async function runOpenCollabCreatorsSync(job: {
         data,
       });
       creatorId = updated.id;
-    } else {
-      const created = await prisma.creator.create({
-        data: {
-          organizationId: job.organizationId,
-          platform: "TIKTOK",
-          handle: creator.handle,
-          displayName: creator.displayName,
-          creatorOpenId: creator.creatorOpenId,
-          followerCount: creator.followerCount,
-          avatarUrl: creator.avatarUrl,
-          stage: "ACTIVE",
-        },
-      });
-      creatorId = created.id;
     }
     creatorsUpserted += 1;
 

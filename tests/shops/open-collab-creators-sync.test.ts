@@ -157,6 +157,60 @@ describe("open-collab creator sync", () => {
     });
   });
 
+  it("recovers when another sync creates the creator first", async () => {
+    vi.mocked(prisma.creator.findUnique)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({
+        id: "concurrent-cr",
+        handle: "alice",
+        stage: "CONTACTED",
+        notes: "keep",
+        contactEmail: "keep@example.com",
+      } as never);
+    vi.mocked(prisma.creator.create).mockRejectedValue({ code: "P2002" });
+    vi.mocked(prisma.creator.update).mockResolvedValue({
+      id: "concurrent-cr",
+      handle: "alice",
+    } as never);
+
+    const result = await runOpenCollabCreatorsSync({
+      organizationId: "org1",
+      shopId: "shop1",
+    });
+
+    expect(result.status).toBe("SUCCEEDED");
+    expect(prisma.creator.findUnique).toHaveBeenCalledTimes(2);
+    expect(prisma.creator.update).toHaveBeenCalledWith({
+      where: { id: "concurrent-cr" },
+      data: {
+        displayName: "Alice",
+        creatorOpenId: "oid-1",
+        followerCount: 10,
+      },
+    });
+  });
+
+  it("recovers when another sync creates the collaborators list first", async () => {
+    vi.mocked(prisma.creatorList.findUnique)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({
+        id: "concurrent-list",
+        name: "Shop collaborators",
+      } as never);
+    vi.mocked(prisma.creatorList.create).mockRejectedValue({ code: "P2002" });
+
+    const result = await runOpenCollabCreatorsSync({
+      organizationId: "org1",
+      shopId: "shop1",
+    });
+
+    expect(result.status).toBe("SUCCEEDED");
+    expect(prisma.creatorList.findUnique).toHaveBeenCalledTimes(2);
+    expect(prisma.creatorListMember.create).toHaveBeenCalledWith({
+      data: { listId: "concurrent-list", creatorId: "cr1" },
+    });
+  });
+
   it("marks the result partial when a product fails and continues", async () => {
     vi.mocked(searchOpenCollaborations).mockResolvedValue({
       items: [
@@ -198,6 +252,110 @@ describe("open-collab creator sync", () => {
 
     expect(result.status).toBe("SUCCEEDED");
     expect(result.creatorsLinkedToList).toBe(0);
+  });
+
+  it("marks the result partial when the product cap truncates results", async () => {
+    vi.mocked(searchOpenCollaborations).mockResolvedValue({
+      items: [
+        { id: "oc1", productId: "p1" },
+        { id: "oc2", productId: "p2" },
+      ],
+      nextPageToken: "more",
+      totalCount: 3,
+    });
+    vi.mocked(getOpenCollabCreatorContentDetails).mockResolvedValue({
+      creators: [],
+      nextPageToken: null,
+      totalCount: 0,
+    });
+
+    const result = await runOpenCollabCreatorsSync(
+      { organizationId: "org1", shopId: "shop1" },
+      { maxProducts: 2, maxCreators: 10_000 },
+    );
+
+    expect(result).toMatchObject({
+      status: "PARTIAL",
+      productsScanned: 2,
+    });
+  });
+
+  it("marks the result partial when the unique creator cap truncates results", async () => {
+    vi.mocked(getOpenCollabCreatorContentDetails).mockResolvedValue({
+      creators: [
+        {
+          creator_open_id: "oid-1",
+          creator_profile: { username: "alice" },
+        },
+        {
+          creator_open_id: "oid-2",
+          creator_profile: { username: "bob" },
+        },
+      ],
+      nextPageToken: null,
+      totalCount: 2,
+    });
+
+    const result = await runOpenCollabCreatorsSync(
+      { organizationId: "org1", shopId: "shop1" },
+      { maxProducts: 500, maxCreators: 1 },
+    );
+
+    expect(result).toMatchObject({
+      status: "PARTIAL",
+      creatorsUpserted: 1,
+    });
+  });
+
+  it("paginates product search and creator details", async () => {
+    vi.mocked(searchOpenCollaborations)
+      .mockResolvedValueOnce({
+        items: [{ id: "oc1", productId: "p1" }],
+        nextPageToken: "products-2",
+        totalCount: 2,
+      })
+      .mockResolvedValueOnce({
+        items: [{ id: "oc2", productId: "p2" }],
+        nextPageToken: null,
+        totalCount: 2,
+      });
+    vi.mocked(getOpenCollabCreatorContentDetails)
+      .mockResolvedValueOnce({
+        creators: [],
+        nextPageToken: "creators-2",
+        totalCount: 1,
+      })
+      .mockResolvedValueOnce({
+        creators: [],
+        nextPageToken: null,
+        totalCount: 1,
+      })
+      .mockResolvedValueOnce({
+        creators: [],
+        nextPageToken: null,
+        totalCount: 0,
+      });
+
+    const result = await runOpenCollabCreatorsSync({
+      organizationId: "org1",
+      shopId: "shop1",
+    });
+
+    expect(result).toMatchObject({
+      status: "SUCCEEDED",
+      productsScanned: 2,
+    });
+    expect(searchOpenCollaborations).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ pageToken: "products-2" }),
+    );
+    expect(getOpenCollabCreatorContentDetails).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        productId: "p1",
+        pageToken: "creators-2",
+      }),
+    );
   });
 
   it("rejects a shop that has not completed TikTok OAuth", async () => {
