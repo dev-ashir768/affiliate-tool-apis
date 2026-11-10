@@ -111,7 +111,13 @@ async function consumeBackupCode(userId: string, code: string): Promise<boolean>
 export async function verifyTotpLogin(
   userId: string,
   code: string,
-  opts: { rememberDevice?: boolean; isStaff?: boolean; userAgent?: string },
+  opts: {
+    rememberDevice?: boolean;
+    isStaff?: boolean;
+    userAgent?: string;
+    breakGlass?: true;
+    targetUserId?: string;
+  },
 ) {
   const user = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
   if (user.status === "DISABLED") {
@@ -128,6 +134,31 @@ export async function verifyTotpLogin(
     if (!backupUsed) {
       throw new AppError("UNAUTHORIZED", "Invalid verification code", 401);
     }
+  }
+
+  if (opts.breakGlass && opts.targetUserId) {
+    const {
+      mintMerchantSessionForTarget,
+      firstActiveMembershipOrgId,
+    } = await import("../platform/mint-merchant-session.js");
+    const organizationId = await firstActiveMembershipOrgId(opts.targetUserId);
+    const minted = await mintMerchantSessionForTarget({
+      actorUserId: userId,
+      targetUserId: opts.targetUserId,
+      organizationId,
+      auditAction: "auth.break_glass",
+    });
+    return {
+      status: "authenticated" as const,
+      breakGlass: true as const,
+      trustedDeviceRaw: undefined,
+      user: minted.user,
+      organizationId: minted.organizationId,
+      platformMembership: null,
+      redirectTo: minted.redirectTo,
+      accessToken: minted.accessToken,
+      refreshToken: minted.refreshToken,
+    };
   }
 
   const { claims, platformMembership } = await resolveAccessClaims(userId);

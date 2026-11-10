@@ -6,6 +6,8 @@ declare global {
   namespace Express {
     interface Request {
       mfaUserId?: string;
+      mfaBreakGlass?: true;
+      mfaTargetUserId?: string;
     }
   }
 }
@@ -25,8 +27,12 @@ export const authenticateMfaPending: RequestHandler = async (req, _res, next) =>
   try {
     const token = mfaPendingTokenFrom(req);
     if (!token) throw new Error("Missing MFA pending token");
-    const { sub } = await verifyMfaPendingToken(token);
-    req.mfaUserId = sub;
+    const claims = await verifyMfaPendingToken(token);
+    req.mfaUserId = claims.sub;
+    if (claims.breakGlass && claims.targetUserId) {
+      req.mfaBreakGlass = true;
+      req.mfaTargetUserId = claims.targetUserId;
+    }
     next();
   } catch {
     next(new AppError("UNAUTHORIZED", "Invalid or expired MFA challenge", 401));

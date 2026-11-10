@@ -243,7 +243,13 @@ authRoutes.post("/login", limitLoginIp, validateBody(loginSchema), limitLoginEma
     const trustedDeviceRaw = req.cookies?.trusted_device as string | undefined;
     const result = await login({ ...req.body, trustedDeviceRaw });
     if (result.status !== "authenticated") {
-      sendMfaChallenge(req, res, 200, result);
+      sendMfaChallenge(
+        req,
+        res,
+        200,
+        result,
+        "breakGlass" in result && result.breakGlass ? { breakGlass: true } : {},
+      );
       return;
     }
     clearMfaPendingCookie(res);
@@ -346,6 +352,13 @@ authRoutes.post(
   authenticateMfaPending,
   async (req, res, next) => {
     try {
+      if (req.mfaBreakGlass) {
+        throw new AppError(
+          "FORBIDDEN",
+          "Break-glass challenge cannot enroll TOTP",
+          403,
+        );
+      }
       const result = await startTotpSetup(req.mfaUserId!);
       res.json(result);
     } catch (err) {
@@ -361,6 +374,13 @@ authRoutes.post(
   validateBody(totpCodeSchema),
   async (req, res, next) => {
     try {
+      if (req.mfaBreakGlass) {
+        throw new AppError(
+          "FORBIDDEN",
+          "Break-glass challenge cannot enroll TOTP",
+          403,
+        );
+      }
       const result = await confirmTotpSetup(req.mfaUserId!, req.body.code);
       clearMfaPendingCookie(res);
       setRefreshCookie(res, result.refreshToken);
@@ -389,6 +409,9 @@ authRoutes.post(
       const result = await verifyTotpLogin(req.mfaUserId!, req.body.code, {
         rememberDevice: req.body.rememberDevice,
         userAgent: req.get("user-agent") ?? undefined,
+        ...(req.mfaBreakGlass && req.mfaTargetUserId
+          ? { breakGlass: true as const, targetUserId: req.mfaTargetUserId }
+          : {}),
       });
       clearMfaPendingCookie(res);
       setRefreshCookie(res, result.refreshToken);
@@ -401,6 +424,9 @@ authRoutes.post(
         organizationId: result.organizationId,
         platformMembership: result.platformMembership,
         redirectTo: result.redirectTo,
+        ...("breakGlass" in result && result.breakGlass
+          ? { breakGlass: true }
+          : {}),
         ...authTokenPayload(req, result),
       });
     } catch (err) {
