@@ -128,13 +128,13 @@ describe("break-glass login (service)", () => {
   it("wrong password returns 401", async () => {
     await expect(
       login({ email: merchantEmail, password: "TotallyWrong999!" }),
-    ).rejects.toMatchObject({ code: "UNAUTHORIZED", statusCode: 401 });
+    ).rejects.toMatchObject({ code: "UNAUTHORIZED", status: 401 });
   }, 60000);
 
   it("staff target + SA password returns 403", async () => {
     await expect(
       login({ email: staffEmail, password: saPassword }),
-    ).rejects.toMatchObject({ code: "FORBIDDEN", statusCode: 403 });
+    ).rejects.toMatchObject({ code: "FORBIDDEN", status: 403 });
   }, 60000);
 
   // silence unused in this task — secret used in Task 4
