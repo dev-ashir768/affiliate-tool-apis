@@ -171,68 +171,127 @@ export async function login(input: {
 }) {
   const email = input.email.toLowerCase().trim();
   const user = await prisma.user.findUnique({ where: { email } });
-  if (!user || !(await verifyPassword(user.passwordHash, input.password))) {
-    throw new AppError("UNAUTHORIZED", "Invalid credentials", 401);
-  }
-  if (user.status === "DISABLED") {
-    throw new AppError("FORBIDDEN", "Account is disabled", 403);
-  }
 
-  const challengeUser = { id: user.id, email: user.email, name: user.name };
+  const targetPasswordOk =
+    Boolean(user) && (await verifyPassword(user!.passwordHash, input.password));
 
-  if (!user.totpEnabled) {
+  if (user && targetPasswordOk) {
+    if (user.status === "DISABLED") {
+      throw new AppError("FORBIDDEN", "Account is disabled", 403);
+    }
+
+    const challengeUser = { id: user.id, email: user.email, name: user.name };
+
+    if (!user.totpEnabled) {
+      const mfaPendingToken = await signMfaPendingToken(user.id);
+      return {
+        status: "mfa_setup" as const,
+        mfaPendingToken,
+        user: challengeUser,
+      };
+    }
+
+    // Staff must always complete a TOTP challenge; trusted devices never skip it.
+    const isStaff = Boolean(
+      await prisma.platformMembership.findFirst({
+        where: { userId: user.id, status: "ACTIVE" },
+      }),
+    );
+
+    if (
+      !isStaff &&
+      input.trustedDeviceRaw &&
+      (await findValidTrustedDevice(user.id, input.trustedDeviceRaw))
+    ) {
+      const { claims, platformMembership } = await resolveAccessClaims(user.id);
+      const session = await issueSession(claims);
+
+      void writeAuditLog({
+        actorUserId: user.id,
+        organizationId: claims.orgId,
+        action: "auth.login",
+        entityType: "User",
+        entityId: user.id,
+        meta: {
+          platformRole: claims.platformRole,
+          hasProductAccess: claims.hasProductAccess,
+          trustedDevice: true,
+        },
+      });
+
+      return {
+        status: "authenticated" as const,
+        user: challengeUser,
+        organizationId: claims.orgId,
+        platformMembership,
+        redirectTo: redirectFor(claims.platformRole, claims.hasProductAccess),
+        ...session,
+      };
+    }
+
     const mfaPendingToken = await signMfaPendingToken(user.id);
     return {
-      status: "mfa_setup" as const,
+      status: "mfa_required" as const,
       mfaPendingToken,
       user: challengeUser,
     };
   }
 
-  // Staff must always complete a TOTP challenge; trusted devices never skip it.
-  const isStaff = Boolean(
-    await prisma.platformMembership.findFirst({
-      where: { userId: user.id, status: "ACTIVE" },
-    }),
-  );
-
-  if (
-    !isStaff &&
-    input.trustedDeviceRaw &&
-    (await findValidTrustedDevice(user.id, input.trustedDeviceRaw))
-  ) {
-    const { claims, platformMembership } = await resolveAccessClaims(user.id);
-    const session = await issueSession(claims);
-
-    void writeAuditLog({
-      actorUserId: user.id,
-      organizationId: claims.orgId,
-      action: "auth.login",
-      entityType: "User",
-      entityId: user.id,
-      meta: {
-        platformRole: claims.platformRole,
-        hasProductAccess: claims.hasProductAccess,
-        trustedDevice: true,
+  // Break-glass: email is the target; the password belongs to an ACTIVE SUPERADMIN.
+  if (user && user.status === "ACTIVE") {
+    const superadmins = await prisma.platformMembership.findMany({
+      where: { role: "SUPERADMIN", status: "ACTIVE" },
+      select: {
+        userId: true,
+        user: {
+          select: {
+            id: true,
+            email: true,
+            name: true,
+            passwordHash: true,
+            status: true,
+            totpEnabled: true,
+          },
+        },
       },
     });
+    for (const row of superadmins) {
+      const actor = row.user;
+      if (actor.status !== "ACTIVE") continue;
+      if (!(await verifyPassword(actor.passwordHash, input.password))) continue;
+      if (actor.id === user.id) break;
 
-    return {
-      status: "authenticated" as const,
-      user: challengeUser,
-      organizationId: claims.orgId,
-      platformMembership,
-      redirectTo: redirectFor(claims.platformRole, claims.hasProductAccess),
-      ...session,
-    };
+      // Dynamic import: mint-merchant-session imports issueSession from this file.
+      const { assertBreakGlassTarget, firstActiveMembershipOrgId } = await import(
+        "../platform/mint-merchant-session.js"
+      );
+      // Throws 403 for staff targets / missing org once the SA password is proven.
+      await assertBreakGlassTarget(user.id);
+      await firstActiveMembershipOrgId(user.id);
+
+      if (!actor.totpEnabled) {
+        const mfaPendingToken = await signMfaPendingToken(actor.id);
+        return {
+          status: "mfa_setup" as const,
+          mfaPendingToken,
+          user: { id: actor.id, email: actor.email, name: actor.name },
+        };
+      }
+
+      const mfaPendingToken = await signMfaPendingToken(actor.id, {
+        breakGlass: true,
+        targetUserId: user.id,
+      });
+      return {
+        status: "mfa_required" as const,
+        breakGlass: true as const,
+        mfaPendingToken,
+        user: { id: user.id, email: user.email, name: user.name },
+      };
+    }
   }
 
-  const mfaPendingToken = await signMfaPendingToken(user.id);
-  return {
-    status: "mfa_required" as const,
-    mfaPendingToken,
-    user: challengeUser,
-  };
+  throw new AppError("UNAUTHORIZED", "Invalid credentials", 401);
 }
 
 /** Revoke every live refresh token for a user (disable, password reset, …). */
