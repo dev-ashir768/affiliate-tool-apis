@@ -2,6 +2,10 @@ import type { Prisma } from "@prisma/client";
 import { AppError } from "../../lib/errors.js";
 import { prisma } from "../../lib/prisma.js";
 import {
+  getShopOpenCollabCreatorsQueue,
+  shopOpenCollabCreatorsQueue,
+} from "../../lib/queue.js";
+import {
   getOpenCollabCreatorContentDetails,
   searchOpenCollaborations,
 } from "../../lib/tiktok-shop/client.js";
@@ -88,6 +92,73 @@ export async function getOpenCollabCreatorsSyncStatus(
     (shop?.openCollabCreatorsSync as OpenCollabCreatorsSyncStatus | null) ??
     null
   );
+}
+
+export type OpenCollabCreatorsSyncEnqueueResult = {
+  jobId: string;
+  status: "QUEUED" | "RUNNING";
+  shopId: string;
+};
+
+export async function enqueueOpenCollabCreatorsSync(
+  organizationId: string,
+  shopId: string,
+  triggeredBy?: string,
+): Promise<OpenCollabCreatorsSyncEnqueueResult> {
+  const shop = await prisma.shop.findFirst({
+    where: { id: shopId, organizationId },
+  });
+  if (!shop) throw new AppError("NOT_FOUND", "Shop not found", 404);
+  if (shop.status === "DISCONNECTED" || !shop.oauthConnectedAt) {
+    throw new AppError(
+      "SHOP_NOT_READY",
+      "Shop has not completed TikTok OAuth",
+      400,
+    );
+  }
+
+  const jobId = `shop-open-collab-creators:${shopId}`;
+  const existing = await getShopOpenCollabCreatorsQueue().getJob(jobId);
+  if (existing) {
+    const state = await existing.getState();
+    if (state === "active" || state === "waiting" || state === "delayed") {
+      return {
+        jobId,
+        status: state === "active" ? "RUNNING" : "QUEUED",
+        shopId,
+      };
+    }
+    await existing.remove();
+  }
+
+  await shopOpenCollabCreatorsQueue.add(
+    "sync",
+    {
+      organizationId,
+      shopId,
+      triggeredBy,
+      requestedAt: new Date().toISOString(),
+    },
+    {
+      jobId,
+      removeOnComplete: 50,
+      removeOnFail: 50,
+      attempts: 2,
+      backoff: { type: "exponential", delay: 5_000 },
+    },
+  );
+
+  await persistSyncStatus(organizationId, shopId, {
+    status: "QUEUED",
+    jobId,
+    productsScanned: 0,
+    creatorsUpserted: 0,
+    creatorsLinkedToList: 0,
+    failedProducts: 0,
+    updatedAt: new Date().toISOString(),
+  });
+
+  return { jobId, status: "QUEUED", shopId };
 }
 
 export async function runOpenCollabCreatorsSync(

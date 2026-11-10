@@ -3,6 +3,7 @@ import { env } from "../config/env.js";
 
 export const SHOP_VERIFY_QUEUE = "shop-verify";
 export const DISCOVERY_SYNC_QUEUE = "discovery-sync";
+export const SHOP_OPEN_COLLAB_CREATORS_QUEUE = "shop-open-collab-creators";
 export const OUTREACH_SEND_QUEUE = "outreach-send";
 export const AFFILIATE_INVITE_QUEUE = "affiliate-invite";
 export const AUTOMATION_RUN_QUEUE = "automation-run";
@@ -39,6 +40,7 @@ const SAFE_RETRY = {
 
 let _shopVerifyQueue: Queue | null = null;
 let _discoverySyncQueue: Queue | null = null;
+let _shopOpenCollabCreatorsQueue: Queue | null = null;
 let _outreachSendQueue: Queue | null = null;
 let _affiliateInviteQueue: Queue | null = null;
 let _automationRunQueue: Queue | null = null;
@@ -62,6 +64,19 @@ export function getDiscoverySyncQueue(): Queue {
     });
   }
   return _discoverySyncQueue;
+}
+
+export function getShopOpenCollabCreatorsQueue(): Queue {
+  if (!_shopOpenCollabCreatorsQueue) {
+    _shopOpenCollabCreatorsQueue = new Queue(
+      SHOP_OPEN_COLLAB_CREATORS_QUEUE,
+      {
+        connection: bullConnection(),
+        defaultJobOptions: { ...RETENTION, ...SAFE_RETRY },
+      },
+    );
+  }
+  return _shopOpenCollabCreatorsQueue;
 }
 
 export function getOutreachSendQueue(): Queue {
@@ -104,6 +119,15 @@ export const discoverySyncQueue = {
     getDiscoverySyncQueue().add(...args),
   close: () =>
     _discoverySyncQueue ? _discoverySyncQueue.close() : Promise.resolve(),
+};
+
+export const shopOpenCollabCreatorsQueue = {
+  add: (...args: Parameters<Queue["add"]>) =>
+    getShopOpenCollabCreatorsQueue().add(...args),
+  close: () =>
+    _shopOpenCollabCreatorsQueue
+      ? _shopOpenCollabCreatorsQueue.close()
+      : Promise.resolve(),
 };
 
 export const outreachSendQueue = {

@@ -1,5 +1,6 @@
 import { startShopVerifyWorker } from "./workers/shop-verify.processor.js";
 import { startDiscoverySyncWorker } from "./workers/discovery-sync.processor.js";
+import { startShopOpenCollabCreatorsWorker } from "./workers/shop-open-collab-creators.processor.js";
 import { startOutreachSendWorker } from "./workers/outreach-send.processor.js";
 import { startAffiliateInviteWorker } from "./workers/affiliate-invite.processor.js";
 import { startAutomationRunWorker } from "./workers/automation-run.processor.js";
@@ -14,6 +15,7 @@ import {
   automationRunQueue,
   discoverySyncQueue,
   outreachSendQueue,
+  shopOpenCollabCreatorsQueue,
   shopVerifyQueue,
 } from "./lib/queue.js";
 
@@ -29,6 +31,7 @@ await initObservability();
 const workers = [
   startShopVerifyWorker(),
   startDiscoverySyncWorker(),
+  startShopOpenCollabCreatorsWorker(),
   startOutreachSendWorker(),
   startAffiliateInviteWorker(),
   startAutomationRunWorker(),
@@ -66,6 +69,7 @@ async function shutdown(signal: string) {
     await Promise.all([
       shopVerifyQueue.close(),
       discoverySyncQueue.close(),
+      shopOpenCollabCreatorsQueue.close(),
       outreachSendQueue.close(),
       affiliateInviteQueue.close(),
       automationRunQueue.close(),
