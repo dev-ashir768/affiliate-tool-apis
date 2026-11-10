@@ -6,6 +6,7 @@ import { allocateBotForShop } from "../bots/bots.service.js";
 import { getShopOpenApiCredentials } from "./tiktok-oauth.service.js";
 import { listRecentBotMail } from "../../lib/bot-inbox.js";
 import { logger } from "../../lib/logger.js";
+import type { OpenCollabCreatorsSyncStatus } from "./open-collab-creators-sync.service.js";
 
 async function countActiveShops(organizationId: string): Promise<number> {
   return prisma.shop.count({
@@ -36,6 +37,7 @@ function toShopResponse(shop: {
   oauthConnectedAt?: Date | null;
   tiktokGrantedScopes?: string[];
   tiktokAccessExpiresAt?: Date | null;
+  openCollabCreatorsSync?: unknown;
 }) {
   return {
     id: shop.id,
@@ -55,6 +57,9 @@ function toShopResponse(shop: {
     oauthConnected: Boolean(shop.oauthConnectedAt),
     oauthScopes: shop.tiktokGrantedScopes ?? [],
     oauthAccessExpiresAt: shop.tiktokAccessExpiresAt?.toISOString() ?? null,
+    openCollabCreatorsSync:
+      (shop.openCollabCreatorsSync as OpenCollabCreatorsSyncStatus | null) ??
+      null,
   };
 }
 

@@ -14,6 +14,7 @@ import {
   signOAuthState,
   verifyOAuthState,
 } from "../../lib/tiktok-shop/oauth.js";
+import { enqueueOpenCollabCreatorsSync } from "./open-collab-creators-sync.service.js";
 
 const STATE_TTL_MS = 15 * 60 * 1000;
 
@@ -196,6 +197,15 @@ export async function completeTikTokShopOAuth(input: {
       sellerName: token.sellerName,
     },
   });
+
+  try {
+    await enqueueOpenCollabCreatorsSync(parsed.orgId, shop.id, parsed.userId);
+  } catch (err) {
+    logger.warn("open-collab creators sync enqueue after oauth failed", {
+      shopId: shop.id,
+      err: err instanceof Error ? err.message : String(err),
+    });
+  }
 
   return {
     id: updated.id,

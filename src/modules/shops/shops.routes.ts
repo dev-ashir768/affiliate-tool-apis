@@ -29,6 +29,10 @@ import {
   getTikTokOAuthStatus,
   startTikTokShopOAuth,
 } from "./tiktok-oauth.service.js";
+import {
+  enqueueOpenCollabCreatorsSync,
+  getOpenCollabCreatorsSyncStatus,
+} from "./open-collab-creators-sync.service.js";
 
 export const shopsRoutes = Router();
 
@@ -354,3 +358,36 @@ shopsRoutes.delete(
     }
   },
 );
+
+shopsRoutes.post(
+  "/:shopId/sync-open-collab-creators",
+  requireRole("OWNER", "ADMIN"),
+  async (req, res, next) => {
+    try {
+      const result = await enqueueOpenCollabCreatorsSync(
+        orgOf(req),
+        String(req.params.shopId),
+        req.auth?.sub,
+      );
+      res.status(202).json(result);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+shopsRoutes.get(
+  "/:shopId/sync-open-collab-creators/status",
+  async (req, res, next) => {
+    try {
+      const status = await getOpenCollabCreatorsSyncStatus(
+        orgOf(req),
+        String(req.params.shopId),
+      );
+      res.json({ status });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
